@@ -1,30 +1,92 @@
-# PAMI - Coupe De France de Robotique
+# CDR 2027 — PAMI
 
-Code des PAMI de l'équipe DaVinciBot, pour la Coupe de France de Robotique.
+Firmware des PAMI (« chevaliers ») pour Eurobot 2027, réécrit à partir du code 2026.
+Le matériel est le même : carte mère ESP32-S3, drivers A4988 + NEMA 17 (17HM15-0904S), lidar YDLIDAR GS2, servo.
 
-## Sommaire
+## Contenu
 
-- [Prérequis](#prérequis)
-- [Installation et configuration](#installation-et-configuration)
-- [Lancer le code](#lancer-le-code)
-- [Structure du dépôt](#structure-du-dépôt)
-- [Organisation des branches](#organisation-des-branches)
+```
+CDR2027/
+└── PAMI/                    firmware PAMI (PlatformIO)
+    ├── include/
+    │   ├── config.h         brochage, mécanique, vitesses, lidar
+    │   ├── pami_profiles.h  rôle + micropas + départ de chaque PAMI (1 à 6)
+    │   └── table_2027.h     positions sur la table (figure 8 du règlement)
+    ├── lib/
+    │   ├── drive/           base roulante (FastAccelStepper + odométrie)
+    │   ├── lidar/           lecture du GS2 dans une tâche dédiée + filtrage
+    │   ├── actuators/       servo (PWM matériel)
+    │   ├── match/           horloge du match, tirette
+    │   ├── actions/         Wait, WaitMatchTime, Forward, Turn, GoTo, ServoMove, ServoSweep
+    │   └── strategy/        enchaînement d'actions
+    └── src/
+        ├── main.cpp         démarrage et déroulé du match
+        ├── strategies.cpp   stratégie de chaque rôle
+        └── console.cpp      console série de test
+```
 
-## Prérequis
+## Ce qui change par rapport à 2026
 
-<!-- À compléter -->
+| 2026 | 2027 |
+|---|---|
+| Pas générés par `loop()` avec `delayMicroseconds(500)` : lent, et les `println` ralentissaient les moteurs | Pas générés en matériel par **FastAccelStepper** : rien ne bloque |
+| Actions bloquantes (`BlockingForward`, `BlockingTurn`) | Toutes les actions sont **non bloquantes** |
+| Rotations au chronomètre + entraxe gonflé à 200 mm + angles « magiques » | Rotations comptées en pas, angles réels |
+| Trajet codé en dur (avance / tourne / avance…) | Le PAMI va à un **point (x, y)** de la table |
+| Lidar lu sans checksum, trames mélangées, quelques indices « devant » devinés | Calibration lue dans le lidar, points convertis en (x, y) avec la formule du SDK YDLIDAR, **couloir** surveillé devant le PAMI, objet le plus proche dans tout le champ, checksum, filtre des points isolés |
+| `PAMI_ID` modifié à la main dans `config.h` | Un environnement PlatformIO par PAMI : `pio run -e pami3` |
+| Moteurs alimentés en permanence | Moteurs alimentés seulement pendant les mouvements |
 
-## Installation et configuration
+## Déroulé d'un match
 
-<!-- À compléter -->
+1. Au démarrage, le PAMI attend la **tirette** (branchée puis retirée).
+2. Il attend la **phase d'attaque** (85 s + 0,3 s de marge + un décalage par PAMI pour ne pas se gêner à la sortie).
+3. Il exécute la stratégie de son rôle :
+   - **douve** : aller à une douve adverse en s'arrêtant devant les obstacles (lidar ignoré dans les 15 derniers cm) ;
+   - **attaque** : avancer vers le centre ; dès que le lidar voit un objet (hors bordures), se diriger vers lui ; au contact, avancer encore de 8 cm et déployer l'actionneur ;
+   - **boulet** : aller au point de tir puis libérer le boulet ;
+   - **test** : carré de 300 mm.
+4. À 99,8 s, il s'arrête. L'actionneur garde sa position.
 
-## Lancer le code
+La couleur vient de la tirette couleur (ou de `COLOR_OVERRIDE`).
 
-<!-- À compléter -->
+## Communication
 
-## Structure du dépôt
+Elle sera assurée par un **module Wi-Fi externe**, pas encore choisi : rien n'est implémenté pour l'instant.
+Quand il sera connu, `GoTo` accepte déjà une cible qui change en cours de route (`GoTo::Options::provider`).
 
-<!-- À compléter -->
+## Compiler et flasher
+
+```bash
+cd PAMI
+pio run -e pami1 -t upload      # PAMI n°1 (pami1 ... pami6)
+pio device monitor              # console, tapez "help"
+```
+
+## Première mise en route (à faire dans cet ordre)
+
+Tout se fait depuis la console série, sans reflasher.
+
+1. **Sens des moteurs** : `f 100`. Si une roue tourne à l'envers, inverser `LEFT_DIR_HIGH_IS_FORWARD` ou `RIGHT_DIR_HIGH_IS_FORWARD` dans `config.h`.
+2. **Distance** : `f 500`, mesurer. Si l'écart dépasse quelques mm, vérifier le **micropas** dans `pami_profiles.h` et `WHEEL_DIAMETER_MM`.
+3. **Entraxe** : `t 360`. S'il tourne trop, diminuer l'entraxe (`base 128` par exemple), recommencer, puis reporter la valeur dans `WHEEL_BASE_MM`.
+4. **Vitesse** : augmenter avec `speed 300`, `accel 1000`… jusqu'à ce que le PAMI perde des pas, puis redescendre de 20 %. Il faut environ 2,1 m en 15 s.
+5. **Lidar** : au démarrage, la console doit afficher `[Lidar] calibration k0=...`. Ensuite :
+   - `lidar` : mettre la main **devant**, puis **à gauche** : x doit valoir la distance, et y doit être positif à gauche (sinon `LIDAR_Y_LEFT_POSITIVE = false`) ;
+   - `lidar pts` : tous les points en (x, y), pour vérifier le champ de vision ;
+   - `zone 120 180` : régler le couloir surveillé (profondeur, largeur), puis le reporter dans `config.h`.
+6. **Test complet** : `start 84000` simule un départ à 84 s, et le PAMI part 1,3 s plus tard.
+
+## Reste à faire
+
+- [ ] **Coordonnées de la table** dans `table_2027.h` : relevées sur la figure 8 (±20 mm), à vérifier sur une vraie table.
+- [ ] **Nombre de PAMI par écurie** (200 x 300 mm) et positions de départ dans `pami_profiles.h`.
+- [ ] **Entraxe réel** (`WHEEL_BASE_MM`) et micropas de chaque PAMI.
+- [ ] Vérifier le **sens des moteurs**, la **lecture de la calibration du lidar**, le **sens gauche/droite** et la position du lidar (`LIDAR_OFFSET_X_MM`).
+- [ ] Pins de la **tirette** et de la **couleur** : repris du câblage 2026, en conflit avec Servo 2 et M0/M1 du LoRa sur le schéma.
+- [ ] Angles des servos pour l'attaque et le boulet (`pami_profiles.h`).
+- [ ] Gyroscope (IMU ICM-45686 en SPI) pour corriger les rotations, si elle est soudée.
+- [ ] Intégrer le **module de communication** quand il sera choisi.
 
 ## Organisation des branches
 

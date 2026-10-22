@@ -1,0 +1,6 @@
+#ifndef FAS_ARCH_COMMON_RP_PICO_H
+#define FAS_ARCH_COMMON_RP_PICO_H
+
+#define SUPPORT_RP_PICO
+
+#endif /* FAS_ARCH_COMMON_RP_PICO_H */

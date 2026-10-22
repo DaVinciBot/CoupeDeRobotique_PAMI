@@ -1,0 +1,90 @@
+#ifndef FAS_QUEUE_BASE_H
+#define FAS_QUEUE_BASE_H
+
+#include "fas_arch/common.h"
+
+// QUEUE_LEN_MASK is used in inline methods below
+#define QUEUE_LEN_MASK (QUEUE_LEN - 1)
+
+// Queue entry: a single low-level stepper command.
+// steps == 0 means pure delay (no step pulses).
+struct queue_entry {
+  uint8_t steps;  // if 0, then the command only adds a delay
+  uint8_t toggle_dir : 1;
+  uint8_t countUp : 1;
+  uint8_t moreThanOneStep : 1;
+  uint8_t hasSteps : 1;
+  uint8_t dirPinState : 1;
+  uint16_t ticks;
+#if defined(SUPPORT_QUEUE_ENTRY_END_POS_U16)
+  uint16_t end_pos_last16;
+#endif
+#if defined(SUPPORT_QUEUE_ENTRY_START_POS_U16)
+  uint16_t start_pos_last16;
+#endif
+};
+
+// Architecture-independent stepper queue state.
+//
+// Each architecture defines `class StepperQueue : public StepperQueueBase`
+// in its own pd_*/ directory, adding hardware-specific fields and methods.
+// Common methods (addQueueEntry, getCurrentPosition, etc.) are defined in
+// StepperISR.cpp and declared here so the compiler sees them on all arches.
+class StepperQueueBase {
+ public:
+  // initialization of this array is not necessary
+  // volatile is not needed, too.
+  struct queue_entry entry[QUEUE_LEN];
+  // not sure, if volatile is needed for these two indices. Leave it for now
+  volatile uint8_t read_idx;  // ISR stops if read_idx == next_write_idx
+  volatile uint8_t next_write_idx;
+  struct queue_end_s queue_end;
+
+  // Commands are suspended during forceStopAndNewPosition()
+  volatile bool ignore_commands;
+  bool dirHighCountsUp;
+  uint8_t dirPin;
+  uint16_t max_speed_in_ticks;
+  uint16_t _last_command_ticks;
+
+  void _base_initVars() {
+    queue_end.dir = true;
+    queue_end.count_up = true;
+    dirHighCountsUp = true;
+    dirPin = PIN_UNDEFINED;
+    // intentionally slow speed to make missing initialization detectable
+    max_speed_in_ticks = TICKS_PER_S / 1000;
+    _last_command_ticks = 65535;
+  }
+
+  inline uint8_t queueEntries() const {
+    fasDisableInterrupts();
+    uint8_t rp = read_idx;
+    uint8_t wp = next_write_idx;
+    fasEnableInterrupts();
+    inject_fill_interrupt(0);
+    return (uint8_t)(wp - rp);
+  }
+  inline bool isQueueFull() const { return queueEntries() == QUEUE_LEN; }
+  inline bool isQueueEmpty() const { return queueEntries() == 0; }
+  inline bool hasStepsInQueue() const {
+    fasDisableInterrupts();
+    uint8_t rp = read_idx;
+    uint8_t wp = next_write_idx;
+    fasEnableInterrupts();
+    while (rp != wp) {
+      if (entry[rp & QUEUE_LEN_MASK].steps > 0) {
+        return true;
+      }
+      rp++;
+    }
+    return false;
+  }
+  inline uint16_t getMaxSpeedInTicks() const { return max_speed_in_ticks; }
+
+#if defined(SUPPORT_UNSAFE_ABS_SPEED_LIMIT_SETTING)
+  void setAbsoluteSpeedLimit(uint16_t ticks) { max_speed_in_ticks = ticks; }
+#endif
+};
+
+#endif  // FAS_QUEUE_BASE_H
