@@ -2,8 +2,7 @@
 
 #include <Arduino.h>
 
-// Horloge du match. Démarrée par la tirette ou par le Pi (START),
-// et resynchronisée à chaque START reçu.
+// Horloge du match, démarrée au retrait de la tirette.
 class MatchClock {
    public:
     void startAt(uint32_t localMs, uint32_t elapsedAtThatTimeMs = 0) {

@@ -56,15 +56,6 @@ void addAttack(App& a, Strategy& s) {
     s.add(new ServoMove(a.servo, ATTACK_SERVO_DEPLOY_DEG));  // tenu jusqu'à la fin
 }
 
-void addBoulet(App& a, Strategy& s) {
-    GoTo::Options o;
-    o.timeoutMs = GOTO_TIMEOUT_MS;
-    o.finalHeading = true;
-    s.add(new GoTo(a.drive, a.lidarOrNull(),
-                   table::forTeam(table::BOULET_LAUNCH_POINT, a.team), o));
-    s.add(new ServoMove(a.servo, BOULET_SERVO_RELEASE_DEG, 800));
-}
-
 }  // namespace
 
 void buildMatchStrategy(App& a) {
@@ -79,9 +70,6 @@ void buildMatchStrategy(App& a) {
             break;
         case Role::Attack:
             addAttack(a, s);
-            break;
-        case Role::Boulet:
-            addBoulet(a, s);
             break;
         case Role::Test:
             for (int i = 0; i < 4; ++i) {

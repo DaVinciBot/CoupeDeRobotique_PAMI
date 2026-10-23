@@ -15,7 +15,6 @@ Team readTeam() {
 
 void applyRoleIdlePosition(App& a) {
     if (a.role == Role::Attack) a.servo.write(ATTACK_SERVO_REST_DEG);
-    if (a.role == Role::Boulet) a.servo.write(BOULET_SERVO_HOLD_DEG);
 }
 
 void startMatch(App& a, uint32_t elapsedMs, const char* source) {

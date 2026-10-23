@@ -89,7 +89,8 @@ class Turn : public Action {
 
 // ------------------------------------------------------------------
 // Aller à un point de la table : tourner vers lui, puis avancer.
-// La cible peut être mise à jour pendant le trajet (Pi, PAMI adverse).
+// La cible peut être mise à jour pendant le trajet (ex. PAMI adverse vu par
+// le lidar).
 // ------------------------------------------------------------------
 class GoTo : public Action {
    public:

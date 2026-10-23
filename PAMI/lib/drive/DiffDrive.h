@@ -57,7 +57,11 @@ class DiffDrive {
     void enableOutputs(bool enable);
 
    private:
+    static constexpr uint32_t ENABLE_DELAY_US = 1000;   // EN actif -> premier pas
+    static constexpr uint32_t POWER_OFF_DELAY_MS = 500;  // arrêt -> moteurs coupés
+
     void startRelative(int32_t dLeft, int32_t dRight);
+    void powerOn();
     void applySpeed();
 
     FastAccelStepperEngine _engine;
@@ -71,6 +75,8 @@ class DiffDrive {
     int32_t _targetLeft = 0;
     int32_t _targetRight = 0;
     uint32_t _moveStartMs = 0;
+    bool _powered = false;
+    uint32_t _idleSinceMs = 0;
 
     int32_t _lastLeft = 0;
     int32_t _lastRight = 0;

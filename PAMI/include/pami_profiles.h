@@ -11,7 +11,6 @@ enum class Role : uint8_t {
     Test = 0,    // carré de test, pour calibrer
     Douve = 1,   // occuper une douve adverse (5 pts)
     Attack = 2,  // toucher un PAMI adverse avec l'actionneur (5 pts)
-    Boulet = 3,  // lancer le boulet dans la cour adverse (5 pts, +15 si 3)
 };
 
 struct PamiProfile {
@@ -32,7 +31,7 @@ constexpr PamiProfile PAMI_PROFILES[] = {
     {2, Role::Douve, 4, 2, {2900.0f, 1850.0f, table::FACING_ENEMY}, 0},    // ex-"Ninja"
     {3, Role::Douve, 8, 1, {2900.0f, 225.0f, table::FACING_ENEMY}, 600},
     {4, Role::Attack, 8, 0, {2900.0f, 1775.0f, table::FACING_ENEMY}, 600},
-    {5, Role::Boulet, 8, 0, {2900.0f, 75.0f, table::FACING_ENEMY}, 1200},
+    {5, Role::Attack, 8, 0, {2900.0f, 75.0f, table::FACING_ENEMY}, 1200},
     {6, Role::Douve, 8, 1, {2900.0f, 1925.0f, table::FACING_ENEMY}, 1200},
 };
 
@@ -54,13 +53,10 @@ inline const char* roleName(Role r) {
         case Role::Test: return "test";
         case Role::Douve: return "douve";
         case Role::Attack: return "attaque";
-        case Role::Boulet: return "boulet";
     }
     return "?";
 }
 
-// Angles de l'actionneur (servo 1) selon le rôle. À régler sur le robot.
+// Angles de l'actionneur d'attaque (servo 1). À régler sur le robot.
 constexpr uint8_t ATTACK_SERVO_REST_DEG = 0;
 constexpr uint8_t ATTACK_SERVO_DEPLOY_DEG = 120;
-constexpr uint8_t BOULET_SERVO_HOLD_DEG = 0;
-constexpr uint8_t BOULET_SERVO_RELEASE_DEG = 90;

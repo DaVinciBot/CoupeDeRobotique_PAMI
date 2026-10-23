@@ -35,7 +35,7 @@ CDR2027/
 | Trajet codé en dur (avance / tourne / avance…) | Le PAMI va à un **point (x, y)** de la table |
 | Lidar lu sans checksum, trames mélangées, quelques indices « devant » devinés | Calibration lue dans le lidar, points convertis en (x, y) avec la formule du SDK YDLIDAR, **couloir** surveillé devant le PAMI, objet le plus proche dans tout le champ, checksum, filtre des points isolés |
 | `PAMI_ID` modifié à la main dans `config.h` | Un environnement PlatformIO par PAMI : `pio run -e pami3` |
-| Moteurs alimentés en permanence | Moteurs alimentés seulement pendant les mouvements |
+| Moteurs alimentés en permanence | Moteurs alimentés seulement pendant les mouvements (pauses comprises) |
 
 ## Déroulé d'un match
 
@@ -44,7 +44,6 @@ CDR2027/
 3. Il exécute la stratégie de son rôle :
    - **douve** : aller à une douve adverse en s'arrêtant devant les obstacles (lidar ignoré dans les 15 derniers cm) ;
    - **attaque** : avancer vers le centre ; dès que le lidar voit un objet (hors bordures), se diriger vers lui ; au contact, avancer encore de 8 cm et déployer l'actionneur ;
-   - **boulet** : aller au point de tir puis libérer le boulet ;
    - **test** : carré de 300 mm.
 4. À 99,8 s, il s'arrête. L'actionneur garde sa position.
 
@@ -84,7 +83,7 @@ Tout se fait depuis la console série, sans reflasher.
 - [ ] **Entraxe réel** (`WHEEL_BASE_MM`) et micropas de chaque PAMI.
 - [ ] Vérifier le **sens des moteurs**, la **lecture de la calibration du lidar**, le **sens gauche/droite** et la position du lidar (`LIDAR_OFFSET_X_MM`).
 - [ ] Pins de la **tirette** et de la **couleur** : repris du câblage 2026, en conflit avec Servo 2 et M0/M1 du LoRa sur le schéma.
-- [ ] Angles des servos pour l'attaque et le boulet (`pami_profiles.h`).
+- [ ] Angles du servo d'attaque (`pami_profiles.h`).
 - [ ] Gyroscope (IMU ICM-45686 en SPI) pour corriger les rotations, si elle est soudée.
 - [ ] Intégrer le **module de communication** quand il sera choisi.
 

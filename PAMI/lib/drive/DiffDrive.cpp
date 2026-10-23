@@ -15,15 +15,15 @@ bool DiffDrive::begin(const Config& cfg) {
     // dirHighCountsUp : position qui augmente = roue qui avance
     _left->setDirectionPin(_cfg.leftDirPin, _cfg.leftDirHighIsForward);
     _right->setDirectionPin(_cfg.rightDirPin, _cfg.rightDirHighIsForward);
-    // A4988 : EN actif à l'état bas. Moteurs alimentés seulement pendant les
-    // mouvements : sinon ils chauffent et vident la batterie pendant les 85 s
-    // d'attente (couper EN ne fait pas perdre la position du micropas).
-    for (FastAccelStepper* s : {_left, _right}) {
-        s->setEnablePin(s == _left ? _cfg.leftEnPin : _cfg.rightEnPin, true);
-        s->setAutoEnable(true);
-        s->setDelayToEnable(1000);  // µs
-        s->setDelayToDisable(500);  // ms
-    }
+    // A4988 : EN actif à l'état bas. Moteurs alimentés seulement pendant un
+    // mouvement, pause comprise : sinon ils chauffent et vident la batterie
+    // pendant les 85 s d'attente (couper EN ne fait pas perdre la position du
+    // micropas). Géré ici et pas par l'auto-enable de FastAccelStepper, qui
+    // couperait les moteurs pendant une pause : un PAMI poussé devant un
+    // obstacle perdrait alors sa position.
+    _left->setEnablePin(_cfg.leftEnPin, true);
+    _right->setEnablePin(_cfg.rightEnPin, true);
+    enableOutputs(false);
 
     applySpeed();
 
@@ -59,6 +59,21 @@ void DiffDrive::update() {
          (l == _targetLeft && r == _targetRight))) {
         _hasTarget = false;
     }
+
+    // Coupure des moteurs après un court délai sans consigne (une pause
+    // garde la consigne, donc les moteurs restent alimentés).
+    bool idle = !_hasTarget && !isMoving();
+    if (!idle) {
+        _idleSinceMs = millis();
+    } else if (_powered && millis() - _idleSinceMs > POWER_OFF_DELAY_MS) {
+        enableOutputs(false);
+    }
+}
+
+void DiffDrive::powerOn() {
+    if (_powered) return;
+    enableOutputs(true);
+    delayMicroseconds(ENABLE_DELAY_US);  // seulement au départ d'un mouvement
 }
 
 void DiffDrive::forward(float mm) {
@@ -80,6 +95,7 @@ void DiffDrive::startRelative(int32_t dLeft, int32_t dRight) {
     _hasTarget = true;
     _paused = false;
     _moveStartMs = millis();
+    powerOn();
     _left->moveTo(_targetLeft);
     _right->moveTo(_targetRight);
 }
@@ -109,6 +125,7 @@ void DiffDrive::resume() {
     if (!_paused) return;
     _paused = false;
     _moveStartMs = millis();
+    powerOn();
     _left->moveTo(_targetLeft);
     _right->moveTo(_targetRight);
 }
@@ -155,4 +172,5 @@ void DiffDrive::enableOutputs(bool enable) {
         _left->disableOutputs();
         _right->disableOutputs();
     }
+    _powered = enable;
 }

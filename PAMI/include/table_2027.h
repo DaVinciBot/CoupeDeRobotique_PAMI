@@ -60,12 +60,9 @@ constexpr Pose ENEMY_DOUVES[] = {
 };
 constexpr uint8_t ENEMY_DOUVE_COUNT = sizeof(ENEMY_DOUVES) / sizeof(ENEMY_DOUVES[0]);
 
-// Attaque : où chercher un PAMI adverse si le Pi n'envoie rien (centre table).
+// Attaque : où chercher un PAMI adverse tant que le lidar ne voit rien
+// (centre table).
 constexpr Pose ATTACK_DEFAULT_TARGET = {1500.0f, 1000.0f, 0.0f};
-
-// Boulet : devant le pont jaune, tourné vers la cour du château jaune.
-// À ajuster selon la portée du lanceur.
-constexpr Pose BOULET_LAUNCH_POINT = {1250.0f, 1000.0f, FACING_ENEMY};
 
 // Obstacles fixes au départ (pour info / simulateur) :
 //   carrières centrales : x 1445..1555, y 340..660 et y 1340..1660
