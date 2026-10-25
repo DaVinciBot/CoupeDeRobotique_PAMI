@@ -1,4 +1,5 @@
-// État global du PAMI, partagé entre main.cpp, strategies.cpp et console.cpp.
+// État d'un PAMI, partagé entre main.cpp, pami_app.cpp, strategies.cpp et
+// console.cpp (et le simulateur, qui en fait tourner six).
 #pragma once
 
 #include <Arduino.h>
@@ -39,6 +40,9 @@ struct App {
 
 extern App app;
 
+// pami_app.cpp
+void appBegin(App& a, uint8_t pamiId, HardwareSerial& lidarSerial);
+void matchUpdate(App& a);  // à chaque tour de boucle, après drive.update()
 void startMatch(App& a, uint32_t elapsedMs, const char* source);
 void endMatch(App& a, const char* reason);
 Team readTeam();

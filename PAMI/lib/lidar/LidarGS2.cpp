@@ -166,6 +166,7 @@ void LidarGS2::handleScan(const uint8_t* data) {
     for (uint16_t i = 0; i < POINT_COUNT; ++i) {
         dist[i] = (raw[2 * i] | (raw[2 * i + 1] << 8)) & 0x01FF;  // 9 bits = mm
         pts[i].valid = false;
+        pts[i].confirmed = false;
         if (_cal.valid && validDist(dist[i])) {
             pts[i].valid = toXY(dist[i], i, pts[i].x, pts[i].y);
         }
@@ -192,6 +193,7 @@ void LidarGS2::handleScan(const uint8_t* data) {
                 if (dx * dx + dy * dy <= tol2) confirmed = true;
             }
             if (!confirmed) continue;
+            pts[i].confirmed = true;
 
             float d2 = pts[i].x * pts[i].x + pts[i].y * pts[i].y;
             if (d2 < nearestD2) {

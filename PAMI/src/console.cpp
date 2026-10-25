@@ -72,7 +72,8 @@ void printLidar(App& a, bool allPoints) {
     a.lidar.copyPoints(p);
     for (uint16_t i = 0; i < LidarGS2::POINT_COUNT; ++i) {
         if (p[i].valid) {
-            Serial.printf("%3u: %3u mm -> (%4.0f, %4.0f)\n", i, d[i], p[i].x, p[i].y);
+            Serial.printf("%3u: %3u mm -> (%4.0f, %4.0f)%s\n", i, d[i], p[i].x,
+                          p[i].y, p[i].confirmed ? "" : "  isole");
         } else if (d[i] > 0) {
             Serial.printf("%3u: %3u mm\n", i, d[i]);
         }

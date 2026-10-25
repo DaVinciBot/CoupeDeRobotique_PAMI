@@ -6,7 +6,8 @@
 struct LidarPoint {
     float x;
     float y;
-    bool valid;
+    bool valid;      // dans la portée et convertible en (x, y)
+    bool confirmed;  // un point voisin est proche (pas un point isolé)
 };
 
 // Driver du lidar YDLIDAR GS2 : deux caméras, 160 points (0..79 et 80..159),

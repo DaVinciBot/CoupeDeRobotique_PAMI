@@ -60,15 +60,76 @@ constexpr Pose ENEMY_DOUVES[] = {
 };
 constexpr uint8_t ENEMY_DOUVE_COUNT = sizeof(ENEMY_DOUVES) / sizeof(ENEMY_DOUVES[0]);
 
-// Attaque : où chercher un PAMI adverse tant que le lidar ne voit rien
-// (centre table).
-constexpr Pose ATTACK_DEFAULT_TARGET = {1500.0f, 1000.0f, 0.0f};
+// Attaque : zones où chaque PAMI d'attaque attend les PAMI adverses, sur leur
+// chemin vers nos douves (côté bleu, x ~ 1950..2400). Une zone par PAMI,
+// espacées de 500 mm : plus que la portée du lidar (300 mm), pour qu'un PAMI
+// ne prenne pas son voisin pour une cible. À vérifier sur la table.
+constexpr Pose ATTACK_ZONES[] = {
+    {1800.0f, 500.0f, FACING_ENEMY},
+    {1800.0f, 1000.0f, FACING_ENEMY},
+    {1800.0f, 1500.0f, FACING_ENEMY},
+};
+constexpr uint8_t ATTACK_ZONE_COUNT = sizeof(ATTACK_ZONES) / sizeof(ATTACK_ZONES[0]);
 
-// Obstacles fixes au départ (pour info / simulateur) :
-//   carrières centrales : x 1445..1555, y 340..660 et y 1340..1660
-//   carrières en bordure (y 0..110 et y 1890..2000) :
-//       x 585..910, 1090..1410, 1590..1910, 2090..2415
-//   tours (cercles d = 200) côté jaune : (495, 400), (495, 1600),
-//       (850, 755), (850, 1245) ; miroir côté bleu.
+// ------------------------------------------------------------------
+// Obstacles fixes au départ, en coordonnées absolues (les deux côtés).
+// Sert à ne pas prendre une tour ou une carrière pour un PAMI adverse.
+// Le château n'y est pas encore : ses murs ne sont pas relevés.
+// ------------------------------------------------------------------
+struct Rect {
+    float x0, x1, y0, y1;
+};
+struct Circle {
+    float x, y, r;
+};
+
+constexpr Rect CARRIERES[] = {
+    // centrales
+    {1445.0f, 1555.0f, 340.0f, 660.0f},
+    {1445.0f, 1555.0f, 1340.0f, 1660.0f},
+    // en bordure, côté y = 0
+    {585.0f, 910.0f, 0.0f, 110.0f},
+    {1090.0f, 1410.0f, 0.0f, 110.0f},
+    {1590.0f, 1910.0f, 0.0f, 110.0f},
+    {2090.0f, 2415.0f, 0.0f, 110.0f},
+    // en bordure, côté y = 2000
+    {585.0f, 910.0f, 1890.0f, 2000.0f},
+    {1090.0f, 1410.0f, 1890.0f, 2000.0f},
+    {1590.0f, 1910.0f, 1890.0f, 2000.0f},
+    {2090.0f, 2415.0f, 1890.0f, 2000.0f},
+};
+
+constexpr Circle TOURS[] = {
+    // côté jaune
+    {495.0f, 400.0f, 100.0f},
+    {495.0f, 1600.0f, 100.0f},
+    {850.0f, 755.0f, 100.0f},
+    {850.0f, 1245.0f, 100.0f},
+    // côté bleu (miroir)
+    {2505.0f, 400.0f, 100.0f},
+    {2505.0f, 1600.0f, 100.0f},
+    {2150.0f, 755.0f, 100.0f},
+    {2150.0f, 1245.0f, 100.0f},
+};
+
+// Point à moins de `margin` mm du bord de la table ?
+inline bool nearEdge(float x, float y, float margin) {
+    return x < margin || x > LENGTH_MM - margin || y < margin || y > WIDTH_MM - margin;
+}
+
+// Point sur (ou à moins de `margin` mm d') une carrière ou une tour ?
+inline bool isFixedObstacle(float x, float y, float margin) {
+    for (const Rect& r : CARRIERES) {
+        if (x >= r.x0 - margin && x <= r.x1 + margin && y >= r.y0 - margin &&
+            y <= r.y1 + margin) {
+            return true;
+        }
+    }
+    for (const Circle& c : TOURS) {
+        float dx = x - c.x, dy = y - c.y, r = c.r + margin;
+        if (dx * dx + dy * dy <= r * r) return true;
+    }
+    return false;
+}
 
 }  // namespace table

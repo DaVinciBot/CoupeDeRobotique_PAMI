@@ -185,3 +185,6 @@ $RECYCLE.BIN/
 # Linux
 .directory
 .Trash-*
+
+# Simulation PAMI (fichiers generes)
+PAMI/sim/out/

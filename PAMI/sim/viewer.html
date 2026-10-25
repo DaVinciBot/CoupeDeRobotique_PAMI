@@ -1,0 +1,364 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Simulation PAMI</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --panel: #ffffff; --text: #1d2330; --muted: #667085;
+    --border: #d9dde5; --accent: #2563eb; --bad: #dc2626; --warn: #d97706;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #12151b; --panel: #1b2029; --text: #e6e9ef; --muted: #98a2b3;
+      --border: #2c3340; --accent: #60a5fa; --bad: #f87171; --warn: #fbbf24;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 14px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  header { display: flex; flex-wrap: wrap; align-items: center; gap: 12px;
+           padding: 10px 16px; border-bottom: 1px solid var(--border); background: var(--panel); }
+  header h1 { font-size: 16px; margin: 0 8px 0 0; }
+  button, select { font: inherit; color: var(--text); background: var(--bg);
+                   border: 1px solid var(--border); border-radius: 6px; padding: 4px 10px; cursor: pointer; }
+  button.primary { background: var(--accent); color: #fff; border-color: var(--accent); min-width: 88px; }
+  #time { font-variant-numeric: tabular-nums; font-weight: 600; min-width: 92px; }
+  #phase { color: var(--muted); }
+  #slider { flex: 1 1 240px; min-width: 160px; }
+  label.toggle { display: inline-flex; align-items: center; gap: 4px; color: var(--muted); cursor: pointer; }
+  main { display: grid; grid-template-columns: minmax(0, auto) minmax(320px, 1fr); gap: 16px; padding: 16px; }
+  #tableWrap { display: flex; justify-content: center; }
+  canvas { background: #2f5d2f; border-radius: 6px; max-width: 100%; touch-action: none; }
+  .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 12px; }
+  .side { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 0 0 8px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  td, th { text-align: left; padding: 4px 6px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+  th { color: var(--muted); font-weight: 500; }
+  .swatch { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; vertical-align: -1px; }
+  .state-bad { color: var(--bad); font-weight: 600; }
+  .state-warn { color: var(--warn); }
+  #events { max-height: 360px; overflow: auto; font-size: 13px; }
+  .ev { display: grid; grid-template-columns: 56px 64px 1fr; gap: 6px; padding: 3px 4px;
+        border-radius: 4px; cursor: pointer; }
+  .ev:hover { background: var(--bg); }
+  .ev .t { color: var(--muted); font-variant-numeric: tabular-nums; }
+  .ev.collision .msg, .ev.alerte .msg { color: var(--bad); font-weight: 600; }
+  .ev.contact .msg { color: var(--warn); font-weight: 600; }
+  .ev.future { display: none; }
+  .ev.log.hidden { display: none; }
+  #empty { max-width: 640px; margin: 48px auto; padding: 24px; }
+  code { background: var(--bg); padding: 1px 5px; border-radius: 4px; }
+  @media (max-width: 900px) { main { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>Simulation PAMI</h1>
+  <button id="play" class="primary">▶ Lecture</button>
+  <select id="speed" title="Vitesse">
+    <option value="0.25">x0,25</option><option value="0.5">x0,5</option>
+    <option value="1" selected>x1</option><option value="2">x2</option><option value="5">x5</option>
+  </select>
+  <span id="time">t = 0,00 s</span>
+  <input id="slider" type="range" min="0" max="0" value="0">
+  <span id="phase"></span>
+  <label class="toggle"><input type="checkbox" id="showLidar" checked> lidar</label>
+  <label class="toggle"><input type="checkbox" id="showTrails" checked> traces</label>
+  <label class="toggle"><input type="checkbox" id="showTargets" checked> cibles</label>
+  <label class="toggle"><input type="checkbox" id="showObstacles"> obstacles fixes</label>
+</header>
+
+<div id="empty" class="panel" hidden>
+  <h2>Pas encore de simulation</h2>
+  <p>Lancez la simulation depuis le dossier <code>PAMI</code> :</p>
+  <p><code>python sim/run.py</code></p>
+  <p>Elle écrit <code>sim/out/sim_data.js</code> puis ouvre cette page.</p>
+</div>
+
+<main id="app">
+  <div id="tableWrap"><canvas id="table"></canvas></div>
+  <div class="side">
+    <div class="panel">
+      <h2>PAMI</h2>
+      <table><thead><tr><th>Nom</th><th>Rôle</th><th>Action</th><th>État</th><th>Cible</th></tr></thead>
+        <tbody id="bodies"></tbody></table>
+    </div>
+    <div class="panel">
+      <h2>Journal <label class="toggle" style="float:right;text-transform:none;letter-spacing:0">
+        <input type="checkbox" id="showLogs"> messages série</label></h2>
+      <div id="events"></div>
+    </div>
+  </div>
+</main>
+
+<script src="out/sim_data.js"></script>
+<script>
+(() => {
+  const D = window.SIM_DATA;
+  if (!D) {
+    document.getElementById("empty").hidden = false;
+    document.getElementById("app").hidden = true;
+    return;
+  }
+
+  const $ = (id) => document.getElementById(id);
+  const canvas = $("table"), ctx = canvas.getContext("2d");
+  const L = D.table.length, W = D.table.width;   // x : 0..L (vers le haut), y : 0..W (vers la gauche)
+  const N = D.bodies.length;
+  const frames = D.frames;
+  const t0 = frames[0][0], tEnd = frames[frames.length - 1][0];
+  const period = frames.length > 1 ? frames[1][0] - frames[0][0] : 20;
+
+  const ourColor = D.team === "bleu" ? "#2f6fe4" : "#e0b100";
+  const enemyColor = D.team === "bleu" ? "#e0b100" : "#2f6fe4";
+  const palette = D.bodies.map(b => b.side === "ours" ? ourColor : enemyColor);
+
+  const img = new Image();
+  let imgOk = false;
+  img.onload = () => { imgOk = true; draw(); };
+  img.src = "../../docs/table_2027_beta.png";
+
+  // ---------- géométrie ----------
+  let scale = 1;  // px par mm
+  function resize() {
+    const avail = Math.min(window.innerHeight - 110, 900);
+    const h = Math.max(360, avail);
+    scale = h / L;
+    canvas.width = Math.round(W * scale);
+    canvas.height = Math.round(L * scale);
+    if (window.innerWidth < 900) {
+      const maxW = window.innerWidth - 32;
+      if (canvas.width > maxW) {
+        scale = maxW / W;
+        canvas.width = Math.round(W * scale);
+        canvas.height = Math.round(L * scale);
+      }
+    }
+    draw();
+  }
+  // Plan vu comme sur la figure du règlement : x vers le haut, y vers la gauche
+  const px = (x, y) => [(W - y) * scale, (L - x) * scale];
+  function local(b, lx, ly) {  // point du repère d'un corps -> table
+    const c = Math.cos(b.th), s = Math.sin(b.th);
+    return [b.x + c * lx - s * ly, b.y + s * lx + c * ly];
+  }
+  function poly(points, fill, stroke, width) {
+    ctx.beginPath();
+    points.forEach(([x, y], i) => {
+      const [u, v] = px(x, y);
+      i ? ctx.lineTo(u, v) : ctx.moveTo(u, v);
+    });
+    ctx.closePath();
+    if (fill) { ctx.fillStyle = fill; ctx.fill(); }
+    if (stroke) { ctx.strokeStyle = stroke; ctx.lineWidth = width || 1.5; ctx.stroke(); }
+  }
+
+  function bodyAt(k, i) {
+    const f = frames[k], o = 1 + i * 6;
+    return { x: f[o], y: f[o + 1], th: f[o + 2], flags: f[o + 3], action: f[o + 4], servo: f[o + 5] };
+  }
+
+  // ---------- dessin ----------
+  let cur = 0;
+  function draw() {
+    if (!canvas.width) return;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    if (imgOk) {
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+    } else {
+      ctx.fillStyle = "#2f5d2f";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+    }
+
+    if ($("showObstacles").checked) {
+      ctx.setLineDash([]);
+      D.carrieres.forEach(([x0, x1, y0, y1]) =>
+        poly([[x0, y0], [x1, y0], [x1, y1], [x0, y1]], "rgba(255,80,80,.25)", "#ff5050", 1.5));
+      D.tours.forEach(([x, y, r]) => {
+        const [u, v] = px(x, y);
+        ctx.beginPath(); ctx.arc(u, v, r * scale, 0, 2 * Math.PI);
+        ctx.fillStyle = "rgba(255,80,80,.25)"; ctx.fill();
+        ctx.strokeStyle = "#ff5050"; ctx.lineWidth = 1.5; ctx.stroke();
+      });
+    }
+
+    if ($("showTargets").checked) {
+      D.bodies.forEach((b, i) => {
+        if (b.side !== "ours" || !b.target) return;
+        const [u0, v0] = px(b.start[0], b.start[1]);
+        const [u1, v1] = px(b.target[0], b.target[1]);
+        ctx.setLineDash([5, 5]);
+        ctx.strokeStyle = "rgba(255,255,255,.75)"; ctx.lineWidth = 1.2;
+        ctx.beginPath(); ctx.moveTo(u0, v0); ctx.lineTo(u1, v1); ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.strokeStyle = palette[i]; ctx.lineWidth = 2.5;
+        const r = 7;
+        ctx.beginPath(); ctx.moveTo(u1 - r, v1 - r); ctx.lineTo(u1 + r, v1 + r);
+        ctx.moveTo(u1 + r, v1 - r); ctx.lineTo(u1 - r, v1 + r); ctx.stroke();
+        label(b.name.replace("PAMI ", ""), u1 + 9, v1 - 9, palette[i]);
+      });
+    }
+
+    if ($("showTrails").checked) {
+      for (let i = 0; i < N; i++) {
+        ctx.beginPath();
+        for (let k = 0; k <= cur; k += 2) {
+          const b = bodyAt(k, i);
+          const [u, v] = px(b.x, b.y);
+          k ? ctx.lineTo(u, v) : ctx.moveTo(u, v);
+        }
+        ctx.strokeStyle = palette[i]; ctx.globalAlpha = .55; ctx.lineWidth = 2;
+        ctx.setLineDash([]); ctx.stroke(); ctx.globalAlpha = 1;
+      }
+    }
+
+    for (let i = 0; i < N; i++) {
+      const meta = D.bodies[i], b = bodyAt(cur, i);
+      const hl = D.pami.length / 2, hw = D.pami.width / 2;
+
+      if (meta.side === "ours" && $("showLidar").checked && !(b.flags & 16)) {
+        const off = D.pami.lidarOffset, R = D.pami.lidarRange, half = D.pami.lidarFovDeg / 2 * Math.PI / 180;
+        const wedge = [local(b, off, 0)];
+        for (let a = -half; a <= half + 1e-6; a += half / 12) {
+          wedge.push(local(b, off + R * Math.cos(a), R * Math.sin(a)));
+        }
+        poly(wedge, "rgba(255,255,255,.12)", null);
+        const dd = D.pami.corridorDepth, ch = D.pami.corridorHalf;
+        const obstacle = b.flags & 1;
+        poly([local(b, off, -ch), local(b, off + dd, -ch), local(b, off + dd, ch), local(b, off, ch)],
+             obstacle ? "rgba(220,38,38,.45)" : "rgba(255,255,255,.18)",
+             obstacle ? "#dc2626" : "rgba(255,255,255,.5)", 1);
+      }
+
+      const collide = b.flags & 2;
+      poly([local(b, hl, hw), local(b, hl, -hw), local(b, -hl, -hw), local(b, -hl, hw)],
+           palette[i], collide ? "#ff1f1f" : "rgba(0,0,0,.65)", collide ? 3.5 : 1.5);
+      // avant du PAMI
+      poly([local(b, hl, 0), local(b, hl - 30, hw * .6), local(b, hl - 30, -hw * .6)], "rgba(0,0,0,.55)", null);
+      // actionneur déployé
+      if (meta.role === "attaque" && b.servo > 0) {
+        poly([local(b, hl, -hw), local(b, hl + 40, -hw), local(b, hl + 40, -hw + 12), local(b, hl, -hw + 12)],
+             "#ff7a00", "#000", 1);
+      }
+      const [u, v] = px(b.x, b.y);
+      label(meta.side === "ours" ? meta.name.replace("PAMI ", "") : "A" + meta.name.replace(/\D/g, ""), u, v, null, true);
+    }
+  }
+
+  function label(text, u, v, color, centered) {
+    ctx.font = "bold 12px system-ui, sans-serif";
+    ctx.textAlign = centered ? "center" : "left";
+    ctx.textBaseline = "middle";
+    ctx.lineWidth = 3; ctx.strokeStyle = "rgba(0,0,0,.8)";
+    ctx.strokeText(text, u, v);
+    ctx.fillStyle = color || "#fff";
+    ctx.fillText(text, u, v);
+  }
+
+  // ---------- panneau ----------
+  const tbody = $("bodies");
+  const rows = D.bodies.map((b, i) => {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `<td><span class="swatch" style="background:${palette[i]}"></span>${b.name}</td>
+      <td>${b.role}</td><td class="act"></td><td class="st"></td><td class="dist"></td>`;
+    tbody.appendChild(tr);
+    return tr;
+  });
+
+  function stateOf(b, meta) {
+    if (b.flags & 2) return ["collision", "state-bad"];
+    if (b.flags & 16) return ["match fini", ""];
+    if (b.flags & 4) return ["pause (évitement)", "state-warn"];
+    if (b.flags & 8) return ["roule", ""];
+    return [meta.side === "ours" ? "arrêté" : "", ""];
+  }
+
+  function updatePanel() {
+    D.bodies.forEach((meta, i) => {
+      const b = bodyAt(cur, i), tr = rows[i];
+      tr.querySelector(".act").textContent = b.action >= 0 ? D.actions[b.action] : "—";
+      const [st, cls] = stateOf(b, meta);
+      const stEl = tr.querySelector(".st");
+      stEl.textContent = st; stEl.className = "st " + cls;
+      const d = meta.target ? Math.hypot(b.x - meta.target[0], b.y - meta.target[1]) : NaN;
+      tr.querySelector(".dist").textContent = isNaN(d) ? "" : `${Math.round(d)} mm`;
+    });
+  }
+
+  const evBox = $("events");
+  const evEls = D.events.map(([t, who, kind, text]) => {
+    const el = document.createElement("div");
+    el.className = "ev " + kind;
+    el.innerHTML = `<span class="t">${(t / 1000).toFixed(2).replace(".", ",")} s</span><span>${who}</span><span class="msg"></span>`;
+    el.querySelector(".msg").textContent = text;
+    el.onclick = () => { pause(); seekTime(t); };
+    evBox.appendChild(el);
+    return [t, el, kind];
+  });
+  function updateEvents() {
+    const t = frames[cur][0], showLogs = $("showLogs").checked;
+    let last = null;
+    evEls.forEach(([te, el, kind]) => {
+      const future = te > t;
+      el.classList.toggle("future", future);
+      el.classList.toggle("hidden", kind === "log" && !showLogs);
+      if (!future && !(kind === "log" && !showLogs)) last = el;
+    });
+    if (playing && last) evBox.scrollTop = evBox.scrollHeight;
+  }
+
+  // ---------- lecture ----------
+  const slider = $("slider");
+  slider.max = frames.length - 1;
+  let playing = false, simTime = t0, lastReal = 0;
+
+  function setFrame(k) {
+    cur = Math.max(0, Math.min(frames.length - 1, k));
+    slider.value = cur;
+    const t = frames[cur][0];
+    $("time").textContent = "t = " + (t / 1000).toFixed(2).replace(".", ",") + " s";
+    $("phase").textContent = t < D.attackPhaseMs ? "avant 85 s : PAMI dans les écuries"
+                          : t < D.matchMs - 200 ? "phase PAMI" : "fin du match";
+    draw(); updatePanel(); updateEvents();
+  }
+  function seekTime(t) {
+    simTime = t;
+    setFrame(Math.round((t - t0) / period));
+  }
+  function tick(now) {
+    if (!playing) return;
+    const dt = lastReal ? now - lastReal : 0;
+    lastReal = now;
+    simTime += dt * parseFloat($("speed").value);
+    if (simTime >= tEnd) { simTime = tEnd; setFrame(frames.length - 1); pause(); return; }
+    setFrame(Math.round((simTime - t0) / period));
+    requestAnimationFrame(tick);
+  }
+  function play() {
+    if (cur >= frames.length - 1) seekTime(t0);
+    playing = true; lastReal = 0;
+    $("play").textContent = "❚❚ Pause";
+    requestAnimationFrame(tick);
+  }
+  function pause() { playing = false; $("play").textContent = "▶ Lecture"; }
+
+  $("play").onclick = () => (playing ? pause() : play());
+  slider.oninput = () => { pause(); simTime = frames[+slider.value][0]; setFrame(+slider.value); };
+  ["showLidar", "showTrails", "showTargets", "showObstacles"].forEach(id => $(id).onchange = draw);
+  $("showLogs").onchange = updateEvents;
+  window.addEventListener("keydown", (e) => {
+    if (e.code === "Space") { e.preventDefault(); playing ? pause() : play(); }
+    if (e.code === "ArrowRight") { pause(); seekTime(frames[cur][0] + 500); }
+    if (e.code === "ArrowLeft") { pause(); seekTime(frames[cur][0] - 500); }
+  });
+  window.addEventListener("resize", resize);
+
+  resize();
+  setFrame(0);
+})();
+</script>
+</body>
+</html>

@@ -43,7 +43,7 @@ CDR2027/
 2. Il attend la **phase d'attaque** (85 s + 0,3 s de marge + un décalage par PAMI pour ne pas se gêner à la sortie).
 3. Il exécute la stratégie de son rôle :
    - **douve** : aller à une douve adverse en s'arrêtant devant les obstacles (lidar ignoré dans les 15 derniers cm) ;
-   - **attaque** : avancer vers le centre ; dès que le lidar voit un objet (hors bordures), se diriger vers lui ; au contact, avancer encore de 8 cm et déployer l'actionneur ;
+   - **attaque** : aller à sa zone (une par PAMI d'attaque, `table::ATTACK_ZONES`) avec l'évitement normal, puis attendre qu'un objet passe à portée du lidar. Les bordures, tours et carrières sont ignorées. Le PAMI suit la cible en corrigeant sa direction en roulant, s'arrête à 18 cm, avance encore de 8 cm et déploie l'actionneur ;
    - **test** : carré de 300 mm.
 4. À 99,8 s, il s'arrête. L'actionneur garde sa position.
 
@@ -61,6 +61,17 @@ cd PAMI
 pio run -e pami1 -t upload      # PAMI n°1 (pami1 ... pami6)
 pio device monitor              # console, tapez "help"
 ```
+
+## Simulation
+
+Le vrai code des 6 PAMI peut tourner sur PC, avec un affichage du match vu de haut :
+
+```bash
+cd PAMI
+python sim/run.py
+```
+
+Détails dans [PAMI/sim/README.md](PAMI/sim/README.md).
 
 ## Première mise en route (à faire dans cet ordre)
 
@@ -84,6 +95,7 @@ Tout se fait depuis la console série, sans reflasher.
 - [ ] Vérifier le **sens des moteurs**, la **lecture de la calibration du lidar**, le **sens gauche/droite** et la position du lidar (`LIDAR_OFFSET_X_MM`).
 - [ ] Pins de la **tirette** et de la **couleur** : repris du câblage 2026, en conflit avec Servo 2 et M0/M1 du LoRa sur le schéma.
 - [ ] Angles du servo d'attaque (`pami_profiles.h`).
+- [ ] Position des **zones d'attaque** (`table_2027.h`) et **murs du château** à ajouter aux obstacles fixes (l'attaque peut encore les prendre pour une cible).
 - [ ] Gyroscope (IMU ICM-45686 en SPI) pour corriger les rotations, si elle est soudée.
 - [ ] Intégrer le **module de communication** quand il sera choisi.
 

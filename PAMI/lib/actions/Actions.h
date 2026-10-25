@@ -90,7 +90,8 @@ class Turn : public Action {
 // ------------------------------------------------------------------
 // Aller à un point de la table : tourner vers lui, puis avancer.
 // La cible peut être mise à jour pendant le trajet (ex. PAMI adverse vu par
-// le lidar).
+// le lidar) : si elle reste à peu près devant, le PAMI corrige sa direction
+// en roulant ; sinon il s'arrête et se réoriente.
 // ------------------------------------------------------------------
 class GoTo : public Action {
    public:
@@ -98,16 +99,23 @@ class GoTo : public Action {
     using TargetProvider = std::function<bool(const Pose& current, Pose& target)>;
 
     struct Options {
-        bool pauseOnObstacle = true;    // évitement : attendre que ça se libère
-        bool finishOnObstacle = false;  // attaque : s'arrêter au contact
-        bool finalHeading = false;      // s'orienter selon target.theta à la fin
+        bool pauseOnObstacle = true;  // évitement : attendre que ça se libère
+        bool finalHeading = false;    // s'orienter selon target.theta à la fin
         // Ignorer le lidar à moins de X mm de la cible (murs du château,
         // pierres autour d'une douve) pour ne pas rester bloqué juste avant.
         float ignoreObstacleWithinMm = 0.0f;
-        uint32_t timeoutMs = 15000;
+        // S'arrêter à X mm de la cible au lieu d'aller dessus (0 = dessus).
+        float stopWithinMm = 0.0f;
+        uint32_t timeoutMs = 15000;  // 0 = pas de limite (fin du match)
+
         TargetProvider provider = nullptr;
+        // Ne pas partir tant que `provider` n'a pas donné de cible.
+        bool waitForTarget = false;
         uint32_t retargetPeriodMs = 500;
         float retargetMinMm = 50.0f;
+        // Au-delà de cet écart d'angle, s'arrêter et se réorienter au lieu de
+        // corriger en roulant.
+        float maxSteerRad = 0.785f;  // 45°
     };
 
     GoTo(DiffDrive& drive, const LidarGS2* lidar, const Pose& target)
@@ -123,10 +131,13 @@ class GoTo : public Action {
     const char* name() const override { return "GoTo"; }
 
    private:
-    enum class Phase { Turning, Driving, FinalTurn, Done };
+    enum class Phase { Waiting, Turning, Driving, FinalTurn, Done };
 
     void planLeg();
+    void finish();
     void checkRetarget();
+    bool pollProvider(Pose& newTarget);
+    bool steerToTarget();
     bool obstacleAhead() const;
 
     DiffDrive& _drive;

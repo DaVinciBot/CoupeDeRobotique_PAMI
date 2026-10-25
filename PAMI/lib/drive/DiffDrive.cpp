@@ -77,19 +77,30 @@ void DiffDrive::powerOn() {
 }
 
 void DiffDrive::forward(float mm) {
-    int32_t steps = lroundf(mm * _stepsPerMm);
-    startRelative(steps, steps);
+    arc(mm, 0.0f);
 }
 
 void DiffDrive::turn(float rad) {
-    float arcMm = rad * 0.5f * _cfg.wheelBaseMm;
-    int32_t steps = lroundf(arcMm * _stepsPerMm);
-    startRelative(-steps, steps);
+    arc(0.0f, rad);
+}
+
+void DiffDrive::arc(float lengthMm, float rotationRad) {
+    float halfMm = rotationRad * 0.5f * _cfg.wheelBaseMm;
+    startRelative(lroundf((lengthMm - halfMm) * _stepsPerMm),
+                  lroundf((lengthMm + halfMm) * _stepsPerMm));
 }
 
 void DiffDrive::startRelative(int32_t dLeft, int32_t dRight) {
-    // Repart de la position actuelle (si un mouvement est en cours, il est
-    // remplacé ; FastAccelStepper enchaîne les rampes).
+    // Vitesse et accélération de chaque roue proportionnelles à sa distance :
+    // partant de l'arrêt, les deux roues suivent la même rampe dans le temps
+    // et l'arc est respecté. Si un mouvement est en cours, il est remplacé
+    // (FastAccelStepper enchaîne les rampes) : la trajectoire s'écarte un peu
+    // de l'arc pendant la transition, mais l'odométrie compte les pas émis.
+    int32_t most = max(abs(dLeft), abs(dRight));
+    _scaleLeft = most > 0 ? (float)abs(dLeft) / most : 1.0f;
+    _scaleRight = most > 0 ? (float)abs(dRight) / most : 1.0f;
+    applySpeed();
+
     _targetLeft = _left->getCurrentPosition() + dLeft;
     _targetRight = _right->getCurrentPosition() + dRight;
     _hasTarget = true;
@@ -155,13 +166,16 @@ void DiffDrive::setAccel(float mmS2) {
 }
 
 void DiffDrive::applySpeed() {
-    uint32_t hz = (uint32_t)lroundf(_cfg.speedMmS * _stepsPerMm);
-    int32_t accel = lroundf(_cfg.accelMmS2 * _stepsPerMm);
-    for (FastAccelStepper* s : {_left, _right}) {
-        s->setSpeedInHz(hz);
-        s->setAcceleration(accel);
+    float hz = _cfg.speedMmS * _stepsPerMm;
+    float accel = _cfg.accelMmS2 * _stepsPerMm;
+    auto apply = [hz, accel](FastAccelStepper* s, float scale) {
+        // FastAccelStepper refuse 0 : au moins 1 pas/s
+        s->setSpeedInHz((uint32_t)max(1L, lroundf(hz * scale)));
+        s->setAcceleration((int32_t)max(1L, lroundf(accel * scale)));
         if (s->isRunning()) s->applySpeedAcceleration();
-    }
+    };
+    apply(_left, _scaleLeft);
+    apply(_right, _scaleRight);
 }
 
 void DiffDrive::enableOutputs(bool enable) {

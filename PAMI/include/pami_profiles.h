@@ -17,27 +17,38 @@ struct PamiProfile {
     uint8_t id;
     Role role;
     uint8_t microstepping;  // réglage matériel des A4988 (MS1..MS3)
-    uint8_t douveIndex;     // pour Role::Douve : index dans table::ENEMY_DOUVES
+    uint8_t targetIndex;    // Douve : index dans table::ENEMY_DOUVES
+                            // Attack : index dans table::ATTACK_ZONES
     Pose startBlue;         // pose de départ (repère table, équipe bleue)
     uint16_t startDelayMs;  // décalage après 85 s, pour ne pas se gêner à la sortie
 };
 
 // Écuries : 200 x 300 mm chacune, 2 par équipe (table::STABLES).
-// /!\ Combien de PAMI tiennent dans une écurie ? Les départs des PAMI 3 à 6
-// supposent 2 PAMI côte à côte par écurie (PAMI de moins de 150 mm de large).
+// 6 PAMI = 3 par écurie, côte à côte, tournés vers l'adversaire : centres
+// espacés de 100 mm. /!\ Il faut donc des PAMI de moins de ~95 mm de large
+// (dimension perpendiculaire au sens de marche) et 200 mm de long.
+// Dans chaque écurie, le PAMI douve qui sort en premier est au milieu.
 constexpr PamiProfile PAMI_PROFILES[] = {
-    // id  rôle        micropas douve  départ (x, y, theta)                 décalage
+    // id  rôle        micropas cible  départ (x, y, theta)                 décalage
+    // écurie 0 (y 0..300)
     {1, Role::Douve, 8, 0, {2900.0f, 150.0f, table::FACING_ENEMY}, 0},     // ex-"Normal"
+    {3, Role::Douve, 8, 1, {2900.0f, 250.0f, table::FACING_ENEMY}, 600},
+    {5, Role::Attack, 8, 0, {2900.0f, 50.0f, table::FACING_ENEMY}, 1200},
+    // écurie 1 (y 1700..2000)
     {2, Role::Douve, 4, 2, {2900.0f, 1850.0f, table::FACING_ENEMY}, 0},    // ex-"Ninja"
-    {3, Role::Douve, 8, 1, {2900.0f, 225.0f, table::FACING_ENEMY}, 600},
-    {4, Role::Attack, 8, 0, {2900.0f, 1775.0f, table::FACING_ENEMY}, 600},
-    {5, Role::Attack, 8, 0, {2900.0f, 75.0f, table::FACING_ENEMY}, 1200},
-    {6, Role::Douve, 8, 1, {2900.0f, 1925.0f, table::FACING_ENEMY}, 1200},
+    {4, Role::Attack, 8, 2, {2900.0f, 1750.0f, table::FACING_ENEMY}, 600},
+    {6, Role::Attack, 8, 1, {2900.0f, 1950.0f, table::FACING_ENEMY}, 1200},
 };
 
-// Attaque : le lidar arrête le PAMI à ~LIDAR_OBSTACLE_MM de la cible, trop
-// loin pour la toucher. Il avance encore de cette distance avant de déployer.
+// Attaque : le PAMI s'arrête quand la cible est à cette distance du centre
+// des roues (lidar devant + couloir surveillé), puis avance encore de
+// ATTACK_CREEP_MM pour la toucher avant de déployer.
+constexpr float ATTACK_STOP_WITHIN_MM = 180.0f;
 constexpr float ATTACK_CREEP_MM = 80.0f;
+// Marge autour des obstacles fixes : un point vu à moins de cette distance
+// d'une tour ou d'une carrière n'est pas pris pour un PAMI adverse
+// (positions relevées à +/- 20 mm, erreur du lidar et de l'odométrie).
+constexpr float ATTACK_FIXED_OBSTACLE_MARGIN_MM = 40.0f;
 // Douve : à l'approche, on ignore le lidar (murs, pierres autour des douves).
 constexpr float DOUVE_IGNORE_OBSTACLE_WITHIN_MM = 150.0f;
 

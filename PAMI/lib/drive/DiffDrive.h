@@ -33,6 +33,10 @@ class DiffDrive {
     // Mouvements relatifs, non bloquants. Remplacent le mouvement en cours.
     void forward(float mm);
     void turn(float rad);
+    // Arc de cercle : `lengthMm` parcourus par le centre des roues en
+    // tournant de `rotationRad`. Les vitesses des deux roues sont dans le même
+    // rapport que leurs distances, pour qu'elles finissent ensemble.
+    void arc(float lengthMm, float rotationRad);
 
     void stop();           // décélère et abandonne la consigne
     void emergencyStop();  // arrêt immédiat (pertes de pas possibles)
@@ -75,6 +79,8 @@ class DiffDrive {
     int32_t _targetLeft = 0;
     int32_t _targetRight = 0;
     uint32_t _moveStartMs = 0;
+    float _scaleLeft = 1.0f;  // part de la vitesse max donnée à chaque roue
+    float _scaleRight = 1.0f;
     bool _powered = false;
     uint32_t _idleSinceMs = 0;
 

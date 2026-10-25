@@ -20,6 +20,10 @@ class Strategy {
     bool isRunning() const { return _running; }
     bool isFinished() const { return !_running; }
     size_t size() const { return _actions.size(); }
+    // Nom de l'action en cours, nullptr si la stratégie est arrêtée.
+    const char* currentActionName() const {
+        return _running ? _actions[_index]->name() : nullptr;
+    }
 
    private:
     void startCurrent();
