@@ -11,13 +11,13 @@ namespace {
 
 // Point vu par le lidar -> position sur la table.
 Pose lidarToTable(const Pose& robot, float lx, float ly) {
-    float x = lx + LIDAR_OFFSET_X_MM;  // repère robot (centre des roues)
+    float x = lx + LIDAR_OFFSET_X_MM;  // repère robot (axe des roues)
     float c = cosf(robot.theta), s = sinf(robot.theta);
     return {robot.x + c * x - s * ly, robot.y + s * x + c * ly, 0.0f};
 }
 
 // Cible = point le plus proche vu par le lidar qui n'est ni un bord de table,
-// ni une tour, ni une carrière : en principe un PAMI adverse.
+// ni une carrière, ni un rempart : en principe un PAMI adverse.
 GoTo::TargetProvider nearestEnemyCandidate(App& a) {
     return [&a](const Pose& robot, Pose& out) {
         if (!a.lidarEnabled || !a.lidar.healthy()) return false;
@@ -45,11 +45,86 @@ GoTo::TargetProvider nearestEnemyCandidate(App& a) {
     };
 }
 
-void addDouve(App& a, Strategy& s) {
-    uint8_t idx = a.profile->targetIndex % table::ENEMY_DOUVE_COUNT;
+// Le PAMI tient-il à cette pose sans toucher muraille, carrière ou bord ?
+// On teste son contour (coins, milieux des côtés) et son centre.
+bool isPoseFree(const Pose& axle) {
+    constexpr float MARGIN_MM = 10.0f;
+    const float c = cosf(axle.theta), s = sinf(axle.theta);
+    const float front = PAMI_LENGTH_MM / 2 - PAMI_AXLE_FROM_CENTER_MM;
+    const float back = -PAMI_LENGTH_MM / 2 - PAMI_AXLE_FROM_CENTER_MM;
+    const float half = PAMI_WIDTH_MM / 2;
+    const float along[3] = {back, (front + back) / 2, front};
+    const float across[3] = {-half, 0.0f, half};
+    for (float u : along) {
+        for (float v : across) {
+            float x = axle.x + c * u - s * v, y = axle.y + s * u + c * v;
+            if (table::nearEdge(x, y, MARGIN_MM) || table::isFixedObstacle(x, y, MARGIN_MM)) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+// Point du lidar sur un obstacle connu (muraille, carrière, bord) ?
+bool isKnownObstacle(const Pose& robot, float lx, float ly) {
+    constexpr float MARGIN_MM = 30.0f;  // erreurs de position et du lidar
+    Pose p = lidarToTable(robot, lx, ly);
+    return table::nearEdge(p.x, p.y, MARGIN_MM) || table::isFixedObstacle(p.x, p.y, MARGIN_MM);
+}
+
+// Options de déplacement : évitement + contournement si bloqué.
+GoTo::Options travelOptions() {
     GoTo::Options o;
     o.timeoutMs = GOTO_TIMEOUT_MS;
+    o.detourAfterMs = DETOUR_AFTER_MS;
+    o.dodgeOncoming = true;
+    o.smooth = true;
+    o.isPoseFree = isPoseFree;
+    o.isKnownObstacle = isKnownObstacle;
+    o.follow = true;
+    o.bypass = true;
+    o.halfWidthMm = PAMI_WIDTH_MM / 2;
+    o.lidarOffsetMm = LIDAR_OFFSET_X_MM;
+    return o;
+}
+
+// Sortie d'écurie tout droit (3 s au plus, arrêt si obstacle), puis points
+// de passage (avec évitement).
+void addExitAndRoute(App& a, Strategy& s) {
+    const PamiProfile& p = *a.profile;
+    if (p.exitMm > 0.0f) {
+        Forward* exit = new Forward(a.drive, a.lidarOrNull(), p.exitMm, p.exitMs);
+        exit->finishOnKnownObstacle(isKnownObstacle);  // muraille : ne pas l'attendre
+        s.add(exit);
+    }
+    for (uint8_t i = 0; i < p.routeLength; ++i) {
+        const Waypoint& w = p.route[i];
+        GoTo::Options o = travelOptions();
+        if (w.zone == Zone::HOME) {  // faire la queue derrière les coéquipiers
+            o.detourAfterMs = 0;
+            o.dodgeOncoming = false;
+            o.smooth = false;  // couloir serré : pivoter sur place (ne déborde pas)
+        }
+        o.keepRightMm = w.zone == Zone::OPEN ? KEEP_RIGHT_MM : 0.0f;
+        // Esquive en S : seulement en terrain ouvert (dans un passage étroit,
+        // pas la place ; et un coéquipier qui y entre de biais la déclenche à tort)
+        if (w.zone != Zone::OPEN) o.dodgeOncoming = false;
+        // Passage étroit : pas la place de se décaler, contourner = reculer
+        // pour laisser passer ; seulement si le blocage dure.
+        if (w.zone == Zone::PASSAGE) o.detourAfterMs = PASSAGE_DETOUR_AFTER_MS;
+        o.passThroughMm = PASS_THROUGH_MM;  // ne pas s'arrêter au point de passage
+        Pose point = {w.x, w.y, 0.0f};
+        s.add(new GoTo(a.drive, a.lidarOrNull(), table::forTeam(point, a.team), o));
+    }
+}
+
+void addDouve(App& a, Strategy& s) {
+    uint8_t idx = a.profile->targetIndex % table::ENEMY_DOUVE_COUNT;
+    addExitAndRoute(a, s);
+    GoTo::Options o = travelOptions();
     o.ignoreObstacleWithinMm = DOUVE_IGNORE_OBSTACLE_WITHIN_MM;
+    o.stopWithinMm = CENTER_AHEAD_OF_AXLE_MM;  // le centre du PAMI sur la douve
     s.add(new GoTo(a.drive, a.lidarOrNull(),
                    table::forTeam(table::ENEMY_DOUVES[idx], a.team), o));
 }
@@ -61,12 +136,18 @@ void addAttack(App& a, Strategy& s) {
     // 1) Aller à sa zone, tourné vers l'adversaire, avec l'évitement normal.
     //    On ne chasse pas en route : on prendrait pour cible le coéquipier
     //    sorti juste avant de la même écurie.
-    GoTo::Options toZone;
-    toZone.timeoutMs = GOTO_TIMEOUT_MS;
+    addExitAndRoute(a, s);
+    GoTo::Options toZone = travelOptions();
     toZone.finalHeading = true;
+    toZone.stopWithinMm = CENTER_AHEAD_OF_AXLE_MM;
     s.add(new GoTo(a.drive, a.lidarOrNull(), zone, toZone));
 
-    // 2) Attendre qu'un PAMI adverse passe à portée du lidar (~30 cm), puis
+    // 2) Ne pas chasser avant ATTACK_HUNT_FROM_MS : avant, ce qui passe
+    //    devant le lidar est souvent un de nos PAMI douve (le lidar ne
+    //    distingue pas les équipes).
+    s.add(new WaitMatchTime(a.clock, ATTACK_HUNT_FROM_MS));
+
+    // 3) Attendre qu'un PAMI adverse passe à portée du lidar (~30 cm), puis
     //    le suivre en corrigeant la direction en roulant, jusqu'à
     //    ATTACK_STOP_WITHIN_MM de lui.
     GoTo::Options hunt;
@@ -79,7 +160,7 @@ void addAttack(App& a, Strategy& s) {
     hunt.retargetMinMm = 20.0f;
     s.add(new GoTo(a.drive, a.lidarOrNull(), zone, hunt));
 
-    // 3) Avancer pour toucher, puis déployer.
+    // 4) Avancer pour toucher, puis déployer.
     s.add(new Forward(a.drive, nullptr, ATTACK_CREEP_MM));  // sans lidar : on veut toucher
     s.add(new ServoMove(a.servo, ATTACK_SERVO_DEPLOY_DEG));  // tenu jusqu'à la fin
 }

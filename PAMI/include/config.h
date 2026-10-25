@@ -48,6 +48,30 @@ constexpr float WHEEL_DIAMETER_MM = 60.01f;
 // (valeur gonflée pour compenser les rotations trop courtes).
 constexpr float WHEEL_BASE_MM = 132.0f;
 
+// Gabarit (règlement : périmètre <= 600 mm au départ, plus grand qu'un
+// cylindre Ø80 x 150). 3 PAMI par écurie de 300 mm -> 95 mm de large max.
+#ifndef PAMI_LENGTH_MM
+#define PAMI_LENGTH_MM 190.0f  // dans le sens de marche
+#endif
+#ifndef PAMI_WIDTH_MM
+#define PAMI_WIDTH_MM 95.0f
+#endif
+// Position de l'axe des roues par rapport au centre du PAMI (+ = vers
+// l'avant, - = vers l'arrière). Le PAMI tourne autour de cet axe.
+//
+// /!\ MÉCA : AXE DES ROUES À L'ARRIÈRE (roue folle devant).
+// Avec 3 PAMI par écurie, celui contre le bord n'a que 2,5 mm de marge.
+//   - roues au centre : en tournant, son arrière déborde de 59 mm dans la
+//     bordure -> il reste bloqué (même la courbe la plus douce déborde de
+//     2,4 mm) : les PAMI douve 1 et 2 n'arrivent jamais.
+//   - roues à 85 mm derrière le centre (10 mm du bord arrière) : l'arrière
+//     déborde de 1 mm -> les 6 PAMI sortent (vérifié en simulation).
+// Mettre ici la valeur RÉELLE du PAMI construit (odométrie, lidar, arrêt
+// sur les cibles en dépendent).
+#ifndef PAMI_AXLE_FROM_CENTER_MM
+#define PAMI_AXLE_FROM_CENTER_MM -85.0f
+#endif
+
 // Sens moteur : niveau de DIR qui fait AVANCER la roue (repris du code 2026).
 constexpr bool LEFT_DIR_HIGH_IS_FORWARD = false;
 constexpr bool RIGHT_DIR_HIGH_IS_FORWARD = true;
@@ -64,11 +88,19 @@ constexpr uint32_t GOTO_TIMEOUT_MS = 15000;
 // ============================================================
 constexpr bool ENABLE_LIDAR = true;
 // Zone surveillée : couloir devant le lidar, profondeur x largeur.
-constexpr uint16_t LIDAR_OBSTACLE_MM = 120;
-constexpr uint16_t LIDAR_CORRIDOR_HALF_WIDTH_MM = 90;  // demi-largeur PAMI + marge
-// Position du lidar devant l'axe des roues (pour placer les points sur la
-// table). TODO mesurer.
-constexpr float LIDAR_OFFSET_X_MM = 60.0f;
+constexpr uint16_t LIDAR_OBSTACLE_MM = 220;  // face à face à 300 mm/s : 2 x 56 mm de freinage + retard
+// Demi-largeur du couloir : à peine plus que le PAMI. Dans l'écurie, le
+// voisin est à 52 mm de l'axe : plus large, le PAMI le verrait et ne
+// sortirait jamais (idem le long du bord de la table).
+constexpr uint16_t LIDAR_CORRIDOR_HALF_WIDTH_MM = (uint16_t)(PAMI_WIDTH_MM / 2 + 2);
+// Position du lidar devant le centre du PAMI. TODO mesurer.
+constexpr float LIDAR_FROM_CENTER_MM = 60.0f;
+// ... et donc devant l'axe des roues (sert à placer les points sur la table)
+constexpr float LIDAR_OFFSET_X_MM = LIDAR_FROM_CENTER_MM - PAMI_AXLE_FROM_CENTER_MM;
+// Distance entre l'axe des roues et le centre du PAMI quand l'axe est à
+// l'arrière : pour que le PAMI (et pas son axe) arrive sur une cible.
+constexpr float CENTER_AHEAD_OF_AXLE_MM =
+    PAMI_AXLE_FROM_CENTER_MM < 0.0f ? -PAMI_AXLE_FROM_CENTER_MM : 0.0f;
 // Gauche/droite : mettre la main à gauche du PAMI, "lidar" doit donner y > 0.
 constexpr bool LIDAR_Y_LEFT_POSITIVE = true;
 // Indices "devant" utilisés seulement si le lidar ne donne pas sa

@@ -18,9 +18,14 @@ int g_pinLevels[64] = {};
 std::vector<SimEvent> g_events;
 int g_currentPami = 0;
 
+// Nos PAMI : "PAMI 3" ; ceux de l'adversaire (id + 100) : "Adv. 3"
 std::string pamiName(int id) {
     char buf[16];
-    snprintf(buf, sizeof(buf), "PAMI %d", id);
+    if (id > 100) {
+        snprintf(buf, sizeof(buf), "Adv. %d", id - 100);
+    } else {
+        snprintf(buf, sizeof(buf), "PAMI %d", id);
+    }
     return buf;
 }
 
@@ -160,10 +165,14 @@ void LidarGS2::simSetScan(const uint16_t* dist, const LidarPoint* pts) {
 }
 
 void LidarGS2::updateObstacle(uint16_t frontMin) {
+    // Objet qui se rapproche vite (face à face) : une seule trame suffit
+    bool fastApproach = _prevFrontMin != 0xFFFF && frontMin != 0xFFFF &&
+                        frontMin + _cfg.fastApproachMm < _prevFrontMin;
+    _prevFrontMin = frontMin;
     if (frontMin < _cfg.obstacleMm) {
         _clearCount = 0;
         if (_nearCount < 255) _nearCount++;
-        if (_nearCount >= _cfg.onFrames) _obstacle = true;
+        if (_nearCount >= _cfg.onFrames || fastApproach) _obstacle = true;
     } else if (frontMin >= _cfg.obstacleMm + _cfg.hysteresisMm) {
         _nearCount = 0;
         if (_clearCount < 255) _clearCount++;

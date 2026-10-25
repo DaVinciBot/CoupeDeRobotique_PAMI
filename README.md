@@ -43,7 +43,7 @@ CDR2027/
 2. Il attend la **phase d'attaque** (85 s + 0,3 s de marge + un décalage par PAMI pour ne pas se gêner à la sortie).
 3. Il exécute la stratégie de son rôle :
    - **douve** : aller à une douve adverse en s'arrêtant devant les obstacles (lidar ignoré dans les 15 derniers cm) ;
-   - **attaque** : aller à sa zone (une par PAMI d'attaque, `table::ATTACK_ZONES`) avec l'évitement normal, puis attendre qu'un objet passe à portée du lidar. Les bordures, tours et carrières sont ignorées. Le PAMI suit la cible en corrigeant sa direction en roulant, s'arrête à 18 cm, avance encore de 8 cm et déploie l'actionneur ;
+   - **attaque** : aller à sa zone (une par PAMI d'attaque, `table::ATTACK_ZONES`) avec l'évitement normal, puis attendre qu'un objet passe à portée du lidar. Les bordures, carrières et remparts sont ignorés. Le PAMI suit la cible en corrigeant sa direction en roulant, s'arrête à 18 cm, avance encore de 8 cm et déploie l'actionneur ;
    - **test** : carré de 300 mm.
 4. À 99,8 s, il s'arrête. L'actionneur garde sa position.
 
@@ -90,12 +90,12 @@ Tout se fait depuis la console série, sans reflasher.
 ## Reste à faire
 
 - [ ] **Coordonnées de la table** dans `table_2027.h` : relevées sur la figure 8 (±20 mm), à vérifier sur une vraie table.
-- [ ] **Nombre de PAMI par écurie** (200 x 300 mm) et positions de départ dans `pami_profiles.h`.
+- [ ] **Méca : axe des roues à l'arrière du PAMI** (`PAMI_AXLE_FROM_CENTER_MM`). Avec 3 PAMI par écurie, celui contre le bord n'a que 2,5 mm de marge : roues au centre, il touche la bordure dès qu'il tourne (vérifié en simulation). Roues à l'arrière, les 6 PAMI sortent sans contact.
 - [ ] **Entraxe réel** (`WHEEL_BASE_MM`) et micropas de chaque PAMI.
 - [ ] Vérifier le **sens des moteurs**, la **lecture de la calibration du lidar**, le **sens gauche/droite** et la position du lidar (`LIDAR_OFFSET_X_MM`).
 - [ ] Pins de la **tirette** et de la **couleur** : repris du câblage 2026, en conflit avec Servo 2 et M0/M1 du LoRa sur le schéma.
 - [ ] Angles du servo d'attaque (`pami_profiles.h`).
-- [ ] Position des **zones d'attaque** (`table_2027.h`) et **murs du château** à ajouter aux obstacles fixes (l'attaque peut encore les prendre pour une cible).
+- [ ] Position des **zones d'attaque**, des **remparts** et des **carrières** (`table_2027.h`) : relevées sur le plan beta, à vérifier sur la version définitive.
 - [ ] Gyroscope (IMU ICM-45686 en SPI) pour corriger les rotations, si elle est soudée.
 - [ ] Intégrer le **module de communication** quand il sera choisi.
 

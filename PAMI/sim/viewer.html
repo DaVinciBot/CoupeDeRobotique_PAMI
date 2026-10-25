@@ -65,10 +65,15 @@
   <span id="time">t = 0,00 s</span>
   <input id="slider" type="range" min="0" max="0" value="0">
   <span id="phase"></span>
+  <label class="toggle">Adversaires
+    <select id="runSelect" title="Avec ou sans les 6 PAMI adverses">
+      <option value="avec">avec (6 contre 6)</option>
+      <option value="sans">sans</option>
+    </select></label>
   <label class="toggle"><input type="checkbox" id="showLidar" checked> lidar</label>
   <label class="toggle"><input type="checkbox" id="showTrails" checked> traces</label>
-  <label class="toggle"><input type="checkbox" id="showTargets" checked> cibles</label>
-  <label class="toggle"><input type="checkbox" id="showObstacles"> obstacles fixes</label>
+  <label class="toggle"><input type="checkbox" id="showTargets" checked> trajets prévus</label>
+  <label class="toggle"><input type="checkbox" id="showObstacles"> carrières</label>
 </header>
 
 <div id="empty" class="panel" hidden>
@@ -95,9 +100,22 @@
 </main>
 
 <script src="out/sim_data.js"></script>
+<script src="out/sim_data_sans.js"></script>
 <script>
 (() => {
-  const D = window.SIM_DATA;
+  // Déroulé choisi : ?run=avec / ?run=sans (menu "Adversaires")
+  const RUNS = window.SIM_RUNS || {};
+  const wanted = new URLSearchParams(location.search).get("run");
+  const runName = RUNS[wanted] ? wanted : (RUNS.avec ? "avec" : "sans");
+  const D = RUNS[runName];
+  const runSelect = document.getElementById("runSelect");
+  for (const opt of runSelect.options) opt.disabled = !RUNS[opt.value];
+  runSelect.value = runName;
+  runSelect.onchange = () => {
+    const url = new URL(location.href);
+    url.searchParams.set("run", runSelect.value);
+    location.href = url.toString();
+  };
   if (!D) {
     document.getElementById("empty").hidden = false;
     document.getElementById("app").hidden = true;
@@ -173,32 +191,35 @@
       ctx.fillRect(0, 0, canvas.width, canvas.height);
     }
 
+    ctx.setLineDash([]);
     if ($("showObstacles").checked) {
-      ctx.setLineDash([]);
       D.carrieres.forEach(([x0, x1, y0, y1]) =>
         poly([[x0, y0], [x1, y0], [x1, y1], [x0, y1]], "rgba(255,80,80,.25)", "#ff5050", 1.5));
-      D.tours.forEach(([x, y, r]) => {
-        const [u, v] = px(x, y);
-        ctx.beginPath(); ctx.arc(u, v, r * scale, 0, 2 * Math.PI);
-        ctx.fillStyle = "rgba(255,80,80,.25)"; ctx.fill();
-        ctx.strokeStyle = "#ff5050"; ctx.lineWidth = 1.5; ctx.stroke();
-      });
     }
+    // murailles (toujours affichées : à ne pas faire tomber)
+    D.murailles.forEach(([cx, cy, th, l, w]) => {
+      const m = { x: cx, y: cy, th };
+      poly([local(m, l / 2, w / 2), local(m, l / 2, -w / 2), local(m, -l / 2, -w / 2), local(m, -l / 2, w / 2)],
+           "rgba(232,188,140,.92)", "rgba(90,60,30,.9)", 1.2);
+    });
 
     if ($("showTargets").checked) {
       D.bodies.forEach((b, i) => {
-        if (b.side !== "ours" || !b.target) return;
-        const [u0, v0] = px(b.start[0], b.start[1]);
+        if (!b.target) return;
+        const path = [b.start].concat(b.route || [], [b.target]);
         const [u1, v1] = px(b.target[0], b.target[1]);
         ctx.setLineDash([5, 5]);
         ctx.strokeStyle = "rgba(255,255,255,.75)"; ctx.lineWidth = 1.2;
-        ctx.beginPath(); ctx.moveTo(u0, v0); ctx.lineTo(u1, v1); ctx.stroke();
+        ctx.beginPath();
+        path.forEach(([x, y], k) => { const [u, v] = px(x, y); k ? ctx.lineTo(u, v) : ctx.moveTo(u, v); });
+        ctx.stroke();
         ctx.setLineDash([]);
         ctx.strokeStyle = palette[i]; ctx.lineWidth = 2.5;
         const r = 7;
         ctx.beginPath(); ctx.moveTo(u1 - r, v1 - r); ctx.lineTo(u1 + r, v1 + r);
         ctx.moveTo(u1 + r, v1 - r); ctx.lineTo(u1 - r, v1 + r); ctx.stroke();
-        label(b.name.replace("PAMI ", ""), u1 + 9, v1 - 9, palette[i]);
+        label(b.side === "ours" ? b.name.replace("PAMI ", "") : "A" + b.name.replace(/\D/g, ""),
+              u1 + 9, v1 - 9, palette[i]);
       });
     }
 
@@ -217,9 +238,12 @@
 
     for (let i = 0; i < N; i++) {
       const meta = D.bodies[i], b = bodyAt(cur, i);
-      const hl = D.pami.length / 2, hw = D.pami.width / 2;
+      const hw = D.pami.width / 2;
+      // (b.x, b.y) = axe des roues ; le rectangle va de l'arrière (back) à l'avant (front)
+      const ax = D.pami.axle;
+      const front = D.pami.length / 2 - ax, back = -D.pami.length / 2 - ax;
 
-      if (meta.side === "ours" && $("showLidar").checked && !(b.flags & 16)) {
+      if ($("showLidar").checked && !(b.flags & 16)) {
         const off = D.pami.lidarOffset, R = D.pami.lidarRange, half = D.pami.lidarFovDeg / 2 * Math.PI / 180;
         const wedge = [local(b, off, 0)];
         for (let a = -half; a <= half + 1e-6; a += half / 12) {
@@ -234,13 +258,15 @@
       }
 
       const collide = b.flags & 2;
-      poly([local(b, hl, hw), local(b, hl, -hw), local(b, -hl, -hw), local(b, -hl, hw)],
+      poly([local(b, front, hw), local(b, front, -hw), local(b, back, -hw), local(b, back, hw)],
            palette[i], collide ? "#ff1f1f" : "rgba(0,0,0,.65)", collide ? 3.5 : 1.5);
       // avant du PAMI
-      poly([local(b, hl, 0), local(b, hl - 30, hw * .6), local(b, hl - 30, -hw * .6)], "rgba(0,0,0,.55)", null);
+      poly([local(b, front, 0), local(b, front - 30, hw * .6), local(b, front - 30, -hw * .6)], "rgba(0,0,0,.55)", null);
+      // axe des roues
+      poly([local(b, 3, hw), local(b, 3, -hw), local(b, -3, -hw), local(b, -3, hw)], "rgba(0,0,0,.35)", null);
       // actionneur déployé
       if (meta.role === "attaque" && b.servo > 0) {
-        poly([local(b, hl, -hw), local(b, hl + 40, -hw), local(b, hl + 40, -hw + 12), local(b, hl, -hw + 12)],
+        poly([local(b, front, -hw), local(b, front + 40, -hw), local(b, front + 40, -hw + 12), local(b, front, -hw + 12)],
              "#ff7a00", "#000", 1);
       }
       const [u, v] = px(b.x, b.y);
@@ -283,7 +309,9 @@
       const [st, cls] = stateOf(b, meta);
       const stEl = tr.querySelector(".st");
       stEl.textContent = st; stEl.className = "st " + cls;
-      const d = meta.target ? Math.hypot(b.x - meta.target[0], b.y - meta.target[1]) : NaN;
+      // distance du centre du PAMI (et non de l'axe des roues) à sa cible
+      const cx = b.x - D.pami.axle * Math.cos(b.th), cy = b.y - D.pami.axle * Math.sin(b.th);
+      const d = meta.target ? Math.hypot(cx - meta.target[0], cy - meta.target[1]) : NaN;
       tr.querySelector(".dist").textContent = isNaN(d) ? "" : `${Math.round(d)} mm`;
     });
   }

@@ -236,10 +236,14 @@ void LidarGS2::handleScan(const uint8_t* data) {
 }
 
 void LidarGS2::updateObstacle(uint16_t frontMin) {
+    // Objet qui se rapproche vite (face à face) : une seule trame suffit
+    bool fastApproach = _prevFrontMin != 0xFFFF && frontMin != 0xFFFF &&
+                        frontMin + _cfg.fastApproachMm < _prevFrontMin;
+    _prevFrontMin = frontMin;
     if (frontMin < _cfg.obstacleMm) {
         _clearCount = 0;
         if (_nearCount < 255) _nearCount++;
-        if (_nearCount >= _cfg.onFrames) _obstacle = true;
+        if (_nearCount >= _cfg.onFrames || fastApproach) _obstacle = true;
     } else if (frontMin >= _cfg.obstacleMm + _cfg.hysteresisMm) {
         _nearCount = 0;
         if (_clearCount < 255) _clearCount++;

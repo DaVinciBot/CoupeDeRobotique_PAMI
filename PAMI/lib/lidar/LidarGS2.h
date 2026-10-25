@@ -46,6 +46,7 @@ class LidarGS2 {
         uint16_t corridorHalfWidthMm = 90;
         uint16_t hysteresisMm = 15;
         uint8_t onFrames = 2;   // trames consécutives pour déclarer un obstacle
+        uint16_t fastApproachMm = 15;  // rapproché de plus que ça en une trame : 1 seule suffit
         uint8_t offFrames = 3;  // trames consécutives pour le lever
 
         uint16_t spikeToleranceMm = 20;  // écart max avec un point voisin
@@ -131,6 +132,7 @@ class LidarGS2 {
     volatile uint32_t _frames = 0;
     volatile uint32_t _badChecksum = 0;
     uint8_t _nearCount = 0;
+    uint16_t _prevFrontMin = 0xFFFF;
     uint8_t _clearCount = 0;
     uint32_t _lastCommandMs = 0;
 };

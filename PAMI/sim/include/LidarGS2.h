@@ -33,6 +33,7 @@ class LidarGS2 {
         uint16_t corridorHalfWidthMm = 90;
         uint16_t hysteresisMm = 15;
         uint8_t onFrames = 2;
+        uint16_t fastApproachMm = 15;
         uint8_t offFrames = 3;
         uint16_t spikeToleranceMm = 20;
         bool yLeftPositive = true;
@@ -87,5 +88,6 @@ class LidarGS2 {
     uint32_t _lastFrameMs = 0;
     uint32_t _frames = 0;
     uint8_t _nearCount = 0;
+    uint16_t _prevFrontMin = 0xFFFF;
     uint8_t _clearCount = 0;
 };

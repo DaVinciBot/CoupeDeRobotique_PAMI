@@ -52,15 +52,6 @@ bool overlapBoxBox(const Box& a, const Box& b) {
     return true;
 }
 
-bool overlapBoxCircle(const Box& b, double cx, double cy, double r) {
-    double c = cos(b.th), s = sin(b.th);
-    double dx = cx - b.cx, dy = cy - b.cy;
-    double lx = c * dx + s * dy, ly = -s * dx + c * dy;
-    double qx = std::max(-b.hl, std::min(b.hl, lx));
-    double qy = std::max(-b.hw, std::min(b.hw, ly));
-    return (lx - qx) * (lx - qx) + (ly - qy) * (ly - qy) <= r * r;
-}
-
 bool boxOutsideTable(const Box& b) {
     Pt c[4];
     corners(b, c);
@@ -93,17 +84,6 @@ double rayBox(double ox, double oy, double dx, double dy, const Box& b) {
     return tMin > 0 ? tMin : 0.0;  // 0 : le lidar est dedans
 }
 
-double rayCircle(double ox, double oy, double dx, double dy, double cx, double cy, double r) {
-    double fx = ox - cx, fy = oy - cy;
-    double b = fx * dx + fy * dy;
-    double c = fx * fx + fy * fy - r * r;
-    double disc = b * b - c;
-    if (disc < 0) return INF;
-    double t = -b - sqrt(disc);
-    if (t < 0) t = -b + sqrt(disc);
-    return t < 0 ? INF : t;
-}
-
 // Bordures de la table (vues de l'intérieur)
 double rayEdges(double ox, double oy, double dx, double dy) {
     double t = INF;
@@ -112,6 +92,22 @@ double rayEdges(double ox, double oy, double dx, double dy) {
     if (dy > 1e-12) t = std::min(t, (table::WIDTH_MM - oy) / dy);
     if (dy < -1e-12) t = std::min(t, -oy / dy);
     return t < 0 ? 0.0 : t;
+}
+
+// Murailles des deux châteaux : d'abord celles du château jaune, puis leur
+// miroir (château bleu).
+const std::vector<Box>& wallBoxes() {
+    static std::vector<Box> walls;
+    if (walls.empty()) {
+        for (int side = 0; side < 2; ++side) {
+            for (const table::Wall& w : table::MURAILLES) {
+                double cx = side ? table::LENGTH_MM - w.cx : w.cx;
+                double th = side ? M_PI - w.angle : w.angle;
+                walls.push_back({cx, w.cy, th, w.length / 2.0, w.width / 2.0});
+            }
+        }
+    }
+    return walls;
 }
 
 std::string fmt(const char* f, double a = 0, double b = 0, double c = 0) {
@@ -139,32 +135,85 @@ void jsonString(FILE* f, const std::string& s) {
 
 // ------------------------------------------------------------------
 
-void SimWorld::addOurPami(App* app, int id) {
+void SimWorld::addPami(App* app, int logId, bool ours, Team team) {
     const PamiProfile& p = *app->profile;
     Pose targetBlue = p.role == Role::Attack
                           ? table::ATTACK_ZONES[p.targetIndex % table::ATTACK_ZONE_COUNT]
                       : p.role == Role::Douve
                           ? table::ENEMY_DOUVES[p.targetIndex % table::ENEMY_DOUVE_COUNT]
                           : p.startBlue;
-    _ours.push_back({app, id, table::forTeam(targetBlue, _opt.team)});
+    SimPami pami = {};
+    pami.app = app;
+    pami.logId = logId;
+    pami.ours = ours;
+    pami.team = team;
+    pami.target = table::forTeam(targetBlue, team);
+    _pamis.push_back(pami);
 }
 
-Box SimWorld::ourBox(const OurPami& p) const {
-    Pose q = p.app->drive.pose();
-    return {q.x, q.y, q.theta, _opt.pamiLengthMm / 2, _opt.pamiWidthMm / 2};
+// Pose = axe des roues ; le centre du rectangle est à
+// PAMI_AXLE_FROM_CENTER_MM derrière.
+Box SimWorld::boxAt(const Pose& q) const {
+    double cx = q.x - PAMI_AXLE_FROM_CENTER_MM * cos(q.theta);
+    double cy = q.y - PAMI_AXLE_FROM_CENTER_MM * sin(q.theta);
+    return {cx, cy, q.theta, _opt.pamiLengthMm / 2, _opt.pamiWidthMm / 2};
 }
 
-Box SimWorld::enemyBox(const EnemyPami& e) const {
-    return {e.pose.x, e.pose.y, e.pose.theta, _opt.pamiLengthMm / 2, _opt.pamiWidthMm / 2};
+// Rectangle à la VRAIE position du PAMI.
+Box SimWorld::pamiBox(const SimPami& p) const {
+    return boxAt(p.truePose);
+}
+
+// Applique à la vraie position de chaque PAMI le déplacement mesuré par son
+// odométrie depuis le pas précédent, sauf s'il le ferait entrer dans un autre
+// PAMI ou sortir de la table : il reste alors bloqué (les roues patinent).
+// Les murailles, elles, ne bloquent pas : elles tombent (signalé ailleurs).
+void SimWorld::moveBodies() {
+    for (size_t i = 0; i < _pamis.size(); ++i) {
+        SimPami& p = _pamis[i];
+        Pose odom = p.app->drive.pose();
+        if (!p.started) {  // départ : vraie position = position annoncée
+            p.truePose = odom;
+            p.lastOdom = odom;
+            p.started = true;
+            continue;
+        }
+
+        // Déplacement dans le repère du PAMI (avance, côté, rotation)
+        double c0 = cos(p.lastOdom.theta), s0 = sin(p.lastOdom.theta);
+        double dx = odom.x - p.lastOdom.x, dy = odom.y - p.lastOdom.y;
+        double ahead = c0 * dx + s0 * dy, side = -s0 * dx + c0 * dy;
+        double dTheta = wrapPi(odom.theta - p.lastOdom.theta);
+        p.lastOdom = odom;
+        p.blocked = false;
+        if (ahead == 0.0 && side == 0.0 && dTheta == 0.0) continue;
+
+        double c = cos(p.truePose.theta), s = sin(p.truePose.theta);
+        Pose next = {(float)(p.truePose.x + c * ahead - s * side),
+                     (float)(p.truePose.y + s * ahead + c * side),
+                     wrapPi(p.truePose.theta + (float)dTheta)};
+        Box nb = boxAt(next);
+        bool free = !boxOutsideTable(nb) || boxOutsideTable(pamiBox(p));
+        for (size_t j = 0; free && j < _pamis.size(); ++j) {
+            if (j != i && overlapBoxBox(nb, pamiBox(_pamis[j]))) free = false;
+        }
+        if (free) {
+            p.truePose = next;
+        } else {
+            p.blocked = true;
+        }
+        float drift = hypotf(odom.x - p.truePose.x, odom.y - p.truePose.y);
+        if (drift > p.maxDriftMm) p.maxDriftMm = drift;
+    }
 }
 
 void SimWorld::step(uint32_t tMs) {
-    if (_collisionFlags.empty()) _collisionFlags.assign(_ours.size() + _enemies.size(), 0);
+    if (_collisionFlags.empty()) _collisionFlags.assign(_pamis.size(), 0);
+    moveBodies();
 
-    moveEnemies(tMs);
     if (tMs % LIDAR_PERIOD_MS == 0) {
-        for (size_t i = 0; i < _ours.size(); ++i) {
-            if (_ours[i].app->lidarEnabled) scanLidar(_ours[i], i);
+        for (size_t i = 0; i < _pamis.size(); ++i) {
+            if (_pamis[i].app->lidarEnabled) scanLidar(_pamis[i], i);
         }
     }
     if (tMs % COLLISION_PERIOD_MS == 0) {
@@ -174,42 +223,25 @@ void SimWorld::step(uint32_t tMs) {
     if (tMs >= _opt.recordFromMs && tMs % _opt.recordPeriodMs == 0) record(tMs);
 }
 
-// Adversaires : ligne droite vers leur cible à vitesse constante, sans
-// évitement (ils traversent ce qu'ils rencontrent : ce sont des leurres).
-void SimWorld::moveEnemies(uint32_t tMs) {
-    for (EnemyPami& e : _enemies) {
-        if (tMs < e.startMs) continue;
-        double dx = e.target.x - e.pose.x, dy = e.target.y - e.pose.y;
-        double d = hypot(dx, dy);
-        if (d < 1.0) continue;
-        e.pose.theta = (float)atan2(dy, dx);
-        double stepMm = std::min(d, e.speedMmS * 0.001);
-        e.pose.x += (float)(dx / d * stepMm);
-        e.pose.y += (float)(dy / d * stepMm);
-    }
-}
-
 double SimWorld::castRay(size_t self, double ox, double oy, double dx, double dy) const {
     double best = rayEdges(ox, oy, dx, dy);
-    for (const table::Circle& c : table::TOURS) {
-        best = std::min(best, rayCircle(ox, oy, dx, dy, c.x, c.y, c.r));
+    for (const Box& w : wallBoxes()) {
+        best = std::min(best, rayBox(ox, oy, dx, dy, w));
     }
     for (const table::Rect& r : table::CARRIERES) {
+        if (!table::CARRIERES_SUR_LA_TABLE) break;
         best = std::min(best, rayBox(ox, oy, dx, dy, aabb(r)));
     }
-    for (size_t j = 0; j < _ours.size(); ++j) {
-        if (j != self) best = std::min(best, rayBox(ox, oy, dx, dy, ourBox(_ours[j])));
-    }
-    for (const EnemyPami& e : _enemies) {
-        best = std::min(best, rayBox(ox, oy, dx, dy, enemyBox(e)));
+    for (size_t j = 0; j < _pamis.size(); ++j) {
+        if (j != self) best = std::min(best, rayBox(ox, oy, dx, dy, pamiBox(_pamis[j])));
     }
     return best;
 }
 
-void SimWorld::scanLidar(OurPami& p, size_t index) {
+void SimWorld::scanLidar(SimPami& p, size_t index) {
     const LidarGS2::Config& cfg = p.app->lidar.simConfig();
     const uint16_t N = LidarGS2::POINT_COUNT;
-    Pose q = p.app->drive.pose();
+    Pose q = p.truePose;  // le lidar voit depuis là où le PAMI est vraiment
     double ox = q.x + LIDAR_OFFSET_X_MM * cos(q.theta);
     double oy = q.y + LIDAR_OFFSET_X_MM * sin(q.theta);
 
@@ -246,23 +278,26 @@ void SimWorld::checkCollisions(uint32_t) {
         if (before.count(key) == 0) simLog(who, kind, text);
     };
 
-    for (size_t i = 0; i < _ours.size(); ++i) {
-        const OurPami& p = _ours[i];
-        std::string who = pamiName(p.id);
-        Box b = ourBox(p);
+    const std::vector<Box>& walls = wallBoxes();
+    for (size_t i = 0; i < _pamis.size(); ++i) {
+        const SimPami& p = _pamis[i];
+        std::string who = pamiName(p.logId);
+        Box b = pamiBox(p);
 
         if (boxOutsideTable(b)) {
             _collisionFlags[i] = 1;
             hit(who + "|bord", who, "collision", "touche le bord de la table");
         }
-        for (const table::Circle& c : table::TOURS) {
-            if (overlapBoxCircle(b, c.x, c.y, c.r)) {
-                _collisionFlags[i] = 1;
-                hit(who + fmt("|tour%.0f,%.0f", c.x, c.y), who, "collision",
-                    fmt("touche la tour (%.0f, %.0f)", c.x, c.y));
-            }
+        for (size_t k = 0; k < walls.size(); ++k) {
+            if (!overlapBoxBox(b, walls[k])) continue;
+            _collisionFlags[i] = 1;
+            bool blue = k >= walls.size() / 2;
+            hit(who + fmt("|muraille%.0f", (double)k), who, "collision",
+                std::string("touche une muraille du chateau ") + (blue ? "bleu" : "jaune") +
+                    fmt(" (%.0f, %.0f) : elle tombe !", walls[k].cx, walls[k].cy));
         }
         for (const table::Rect& r : table::CARRIERES) {
+            if (!table::CARRIERES_SUR_LA_TABLE) break;
             if (overlapBoxBox(b, aabb(r))) {
                 _collisionFlags[i] = 1;
                 hit(who + fmt("|carriere%.0f,%.0f", r.x0, r.y0), who, "collision",
@@ -270,19 +305,24 @@ void SimWorld::checkCollisions(uint32_t) {
                         fmt("%.0f", r.y1));
             }
         }
-        for (size_t j = i + 1; j < _ours.size(); ++j) {
-            if (overlapBoxBox(b, ourBox(_ours[j]))) {
-                _collisionFlags[i] = _collisionFlags[j] = 1;
-                std::string other = pamiName(_ours[j].id);
-                hit(who + "|" + other, who, "collision", "touche " + other + " (coequipier)");
-            }
+        Box touch = b;  // agrandi de 2 mm : les PAMI se touchent sans se recouvrir
+        touch.hl += 2.0;
+        touch.hw += 2.0;
+        if (p.blocked && boxOutsideTable(touch)) {
+            _collisionFlags[i] = 1;
+            hit(who + "|bord", who, "collision", "bloque contre le bord de la table");
         }
-        for (size_t e = 0; e < _enemies.size(); ++e) {
-            if (overlapBoxBox(b, enemyBox(_enemies[e]))) {
-                _collisionFlags[i] = 1;
-                _collisionFlags[_ours.size() + e] = 1;
-                hit(who + "|" + _enemies[e].name, who, "contact",
-                    "touche " + _enemies[e].name);
+        for (size_t j = i + 1; j < _pamis.size(); ++j) {
+            if (!overlapBoxBox(touch, pamiBox(_pamis[j]))) continue;
+            _collisionFlags[i] = _collisionFlags[j] = 1;
+            std::string other = pamiName(_pamis[j].logId);
+            if (_pamis[j].ours == p.ours) {
+                hit(who + "|" + other, who, "collision", "touche " + other + " (coequipier)");
+            } else {
+                // contact entre équipes : rapporté du point de vue de notre PAMI
+                const std::string& mine = p.ours ? who : other;
+                const std::string& theirs = p.ours ? other : who;
+                hit(who + "|" + other, mine, "contact", "touche " + theirs);
             }
         }
     }
@@ -292,17 +332,17 @@ void SimWorld::checkCollisions(uint32_t) {
 // Règle : sortir de son écurie avant 85 s = retiré du match.
 void SimWorld::checkStables(uint32_t tMs) {
     if (tMs >= ATTACK_PHASE_START_MS) return;
-    for (const OurPami& p : _ours) {
-        if (_leftStableEarly.count(p.id)) continue;
-        Pose q = p.app->drive.pose();
+    for (const SimPami& p : _pamis) {
+        if (_leftStableEarly.count(p.logId)) continue;
+        Box b = pamiBox(p);
         bool inside = false;
         for (const Pose& s : table::STABLES) {
-            Pose c = table::forTeam(s, _opt.team);
-            if (fabs(q.x - c.x) <= 100.0 && fabs(q.y - c.y) <= 150.0) inside = true;
+            Pose c = table::forTeam(s, p.team);
+            if (fabs(b.cx - c.x) <= 100.0 && fabs(b.cy - c.y) <= 150.0) inside = true;
         }
         if (!inside) {
-            _leftStableEarly.insert(p.id);
-            simLog(pamiName(p.id), "alerte",
+            _leftStableEarly.insert(p.logId);
+            simLog(pamiName(p.logId), "alerte",
                    fmt("sort de l'ecurie avant 85 s (t = %.1f s) : retire du match", tMs / 1000.0));
         }
     }
@@ -320,9 +360,9 @@ int SimWorld::actionIndex(const char* name) {
 void SimWorld::record(uint32_t tMs) {
     Frame f;
     f.t = tMs;
-    for (size_t i = 0; i < _ours.size(); ++i) {
-        App& a = *_ours[i].app;
-        Pose q = a.drive.pose();
+    for (size_t i = 0; i < _pamis.size(); ++i) {
+        App& a = *_pamis[i].app;
+        Pose q = _pamis[i].truePose;
         int flags = 0;
         if (a.lidarEnabled && a.lidar.obstacle()) flags |= FLAG_OBSTACLE;
         if (_collisionFlags[i]) flags |= FLAG_COLLISION;
@@ -334,62 +374,65 @@ void SimWorld::record(uint32_t tMs) {
                            (float)a.servo.angle()};
         f.values.insert(f.values.end(), values, values + 6);
     }
-    for (size_t e = 0; e < _enemies.size(); ++e) {
-        const EnemyPami& en = _enemies[e];
-        int flags = _collisionFlags[_ours.size() + e] ? FLAG_COLLISION : 0;
-        float values[6] = {en.pose.x, en.pose.y, en.pose.theta, (float)flags, -1.0f, 0.0f};
-        f.values.insert(f.values.end(), values, values + 6);
-    }
     _frames.push_back(f);
 }
 
-bool SimWorld::writeOutput(const char* path) const {
+bool SimWorld::writeOutput(const char* path, const char* name) const {
     FILE* f = fopen(path, "w");
     if (f == nullptr) return false;
 
-    fprintf(f, "window.SIM_DATA = {\n");
+    fprintf(f, "window.SIM_RUNS = window.SIM_RUNS || {};\n");
+    fprintf(f, "window.SIM_RUNS[\"%s\"] = {\n", name);
     fprintf(f, "\"team\": \"%s\",\n", _opt.team == Team::Blue ? "bleu" : "jaune");
     fprintf(f, "\"table\": {\"length\": %.0f, \"width\": %.0f},\n", table::LENGTH_MM,
             table::WIDTH_MM);
     fprintf(f,
             "\"pami\": {\"length\": %.0f, \"width\": %.0f, \"lidarOffset\": %.0f, "
             "\"lidarRange\": %u, \"lidarFovDeg\": %.0f, \"corridorDepth\": %u, "
-            "\"corridorHalf\": %u},\n",
+            "\"corridorHalf\": %u, \"axle\": %.0f},\n",
             _opt.pamiLengthMm, _opt.pamiWidthMm, LIDAR_OFFSET_X_MM, 300u, LIDAR_FOV_DEG,
-            (unsigned)LIDAR_OBSTACLE_MM, (unsigned)LIDAR_CORRIDOR_HALF_WIDTH_MM);
+            (unsigned)LIDAR_OBSTACLE_MM, (unsigned)LIDAR_CORRIDOR_HALF_WIDTH_MM,
+            (double)PAMI_AXLE_FROM_CENTER_MM);
     fprintf(f, "\"attackPhaseMs\": %u, \"matchMs\": %u,\n", (unsigned)ATTACK_PHASE_START_MS,
             (unsigned)MATCH_DURATION_MS);
 
     fprintf(f, "\"carrieres\": [");
     bool first = true;
     for (const table::Rect& r : table::CARRIERES) {
+        if (!table::CARRIERES_SUR_LA_TABLE) break;
         fprintf(f, "%s[%.0f,%.0f,%.0f,%.0f]", first ? "" : ",", r.x0, r.x1, r.y0, r.y1);
         first = false;
     }
-    fprintf(f, "],\n\"tours\": [");
+    // murailles : centre x, centre y, angle, longueur, largeur
+    fprintf(f, "],\n\"murailles\": [");
     first = true;
-    for (const table::Circle& c : table::TOURS) {
-        fprintf(f, "%s[%.0f,%.0f,%.0f]", first ? "" : ",", c.x, c.y, c.r);
+    for (const Box& w : wallBoxes()) {
+        fprintf(f, "%s[%.1f,%.1f,%.4f,%.0f,%.0f]", first ? "" : ",", w.cx, w.cy, w.th, 2 * w.hl,
+                2 * w.hw);
         first = false;
     }
     fprintf(f, "],\n");
 
     fprintf(f, "\"bodies\": [\n");
     const char* sep = "";
-    for (size_t i = 0; i < _ours.size(); ++i) {
-        const OurPami& p = _ours[i];
-        Pose s = table::forTeam(p.app->profile->startBlue, _opt.team);
+    for (const SimPami& p : _pamis) {
+        const PamiProfile& prof = *p.app->profile;
+        Pose s = table::forTeam(prof.startBlue, p.team);
+        fprintf(f, "%s{\"name\": ", sep);
+        jsonString(f, pamiName(p.logId));
         fprintf(f,
-                "%s{\"name\": \"PAMI %d\", \"side\": \"ours\", \"role\": \"%s\", "
-                "\"start\": [%.0f,%.0f], \"target\": [%.0f,%.0f]}",
-                sep, p.id, roleName(p.app->role), s.x, s.y, p.target.x, p.target.y);
-        sep = ",\n";
-    }
-    for (const EnemyPami& e : _enemies) {
-        fprintf(f,
-                "%s{\"name\": \"%s\", \"side\": \"enemy\", \"role\": \"adversaire\", "
-                "\"start\": [%.0f,%.0f], \"target\": [%.0f,%.0f]}",
-                sep, e.name.c_str(), e.start.x, e.start.y, e.target.x, e.target.y);
+                ", \"side\": \"%s\", \"role\": \"%s\", \"start\": [%.0f,%.0f], "
+                "\"target\": [%.0f,%.0f], \"route\": [",
+                p.ours ? "ours" : "enemy", roleName(p.app->role), s.x, s.y, p.target.x,
+                p.target.y);
+        // sortie d'écurie tout droit, puis points de passage
+        Pose exitPose = {s.x + prof.exitMm * cosf(s.theta), s.y + prof.exitMm * sinf(s.theta), 0};
+        fprintf(f, "[%.0f,%.0f]", exitPose.x, exitPose.y);
+        for (uint8_t k = 0; k < prof.routeLength; ++k) {
+            Pose q = table::forTeam({prof.route[k].x, prof.route[k].y, 0.0f}, p.team);
+            fprintf(f, ",[%.0f,%.0f]", q.x, q.y);
+        }
+        fprintf(f, "]}");
         sep = ",\n";
     }
     fprintf(f, "\n],\n");
@@ -430,12 +473,26 @@ bool SimWorld::writeOutput(const char* path) const {
 }
 
 void SimWorld::printSummary() const {
-    printf("\n=== Resultat (equipe %s) ===\n", _opt.team == Team::Blue ? "bleue" : "jaune");
-    for (const OurPami& p : _ours) {
-        Pose q = p.app->drive.pose();
-        double d = hypot(q.x - p.target.x, q.y - p.target.y);
-        printf("PAMI %d (%-7s) : fin en (%4.0f, %4.0f), a %4.0f mm de sa cible\n", p.id,
-               roleName(p.app->role), q.x, q.y, d);
+    for (int side = 0; side < 2; ++side) {
+        bool ours = side == 0;
+        bool any = false;
+        for (const SimPami& p : _pamis) {
+            if (p.ours != ours) continue;
+            if (!any) {
+                printf("\n=== %s (equipe %s) ===\n", ours ? "Nos PAMI" : "Adversaires",
+                       p.team == Team::Blue ? "bleue" : "jaune");
+                any = true;
+            }
+            Pose q = p.truePose;
+            Box body = pamiBox(p);  // distance mesurée depuis le centre du PAMI
+            double d = hypot(body.cx - p.target.x, body.cy - p.target.y);
+            printf("%-8s (%-7s) : fin en (%4.0f, %4.0f), a %4.0f mm de sa cible",
+                   pamiName(p.logId).c_str(), roleName(p.app->role), q.x, q.y, d);
+            if (p.maxDriftMm >= 5.0f) {
+                printf("  (bloque : odometrie fausse de %.0f mm)", p.maxDriftMm);
+            }
+            printf("\n");
+        }
     }
     int collisions = 0, contacts = 0, alerts = 0;
     for (const SimEvent& e : g_events) {
@@ -443,8 +500,8 @@ void SimWorld::printSummary() const {
         if (e.kind == "contact") contacts++;
         if (e.kind == "alerte") alerts++;
     }
-    printf("Collisions : %d, contacts adverses : %d, alertes : %d\n", collisions, contacts,
-           alerts);
+    printf("\nCollisions : %d, contacts entre equipes : %d, alertes : %d\n", collisions,
+           contacts, alerts);
     for (const SimEvent& e : g_events) {
         if (e.kind == "log") continue;
         printf("  %6.2f s  %-8s %s\n", e.t / 1000.0, e.who.c_str(), e.text.c_str());
