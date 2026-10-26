@@ -207,9 +207,40 @@ void SimWorld::moveBodies() {
     }
 }
 
+// Ce que la Jetson enverrait en Wi-Fi : appelle les mêmes fonctions que
+// src/wifi.cpp sur le robot (remote.cpp).
+void SimWorld::jetson(uint32_t tMs) {
+    if (tMs < ATTACK_PHASE_START_MS) return;  // les PAMI sont dans les écuries
+    bool enemies = tMs % _opt.jetsonEnemiesPeriodMs == 0;
+    bool odometry = tMs % _opt.jetsonOdometryPeriodMs == 0;
+    if (!enemies && !odometry) return;
+
+    for (SimPami& p : _pamis) {
+        if (!p.started) continue;
+        g_currentPami = p.logId;
+        if (enemies) {  // centres des PAMI de l'autre équipe
+            float xs[RemoteEnemies::MAX], ys[RemoteEnemies::MAX];
+            uint8_t n = 0;
+            for (const SimPami& o : _pamis) {
+                if (o.ours == p.ours || n >= RemoteEnemies::MAX) continue;
+                Box b = pamiBox(o);
+                xs[n] = (float)b.cx;
+                ys[n] = (float)b.cy;
+                ++n;
+            }
+            remoteEnemyPositions(*p.app, xs, ys, n);
+        }
+        if (odometry) {  // recalage sur la vraie position
+            remoteSetOdometry(*p.app, p.truePose);
+            p.lastOdom = p.truePose;  // l'odométrie repart d'ici : pas de saut
+        }
+    }
+}
+
 void SimWorld::step(uint32_t tMs) {
     if (_collisionFlags.empty()) _collisionFlags.assign(_pamis.size(), 0);
     moveBodies();
+    if (_opt.jetson) jetson(tMs);
 
     if (tMs % LIDAR_PERIOD_MS == 0) {
         for (size_t i = 0; i < _pamis.size(); ++i) {
@@ -393,8 +424,9 @@ bool SimWorld::writeOutput(const char* path, const char* name) const {
             _opt.pamiLengthMm, _opt.pamiWidthMm, LIDAR_OFFSET_X_MM, 300u, LIDAR_FOV_DEG,
             (unsigned)LIDAR_OBSTACLE_MM, (unsigned)LIDAR_CORRIDOR_HALF_WIDTH_MM,
             (double)PAMI_AXLE_FROM_CENTER_MM);
-    fprintf(f, "\"attackPhaseMs\": %u, \"matchMs\": %u,\n", (unsigned)ATTACK_PHASE_START_MS,
-            (unsigned)MATCH_DURATION_MS);
+    fprintf(f, "\"attackPhaseMs\": %u, \"matchMs\": %u, \"jetson\": %s,\n",
+            (unsigned)ATTACK_PHASE_START_MS, (unsigned)MATCH_DURATION_MS,
+            _opt.jetson ? "true" : "false");
 
     fprintf(f, "\"carrieres\": [");
     bool first = true;
@@ -500,7 +532,9 @@ void SimWorld::printSummary() const {
         if (e.kind == "contact") contacts++;
         if (e.kind == "alerte") alerts++;
     }
-    printf("\nCollisions : %d, contacts entre equipes : %d, alertes : %d\n", collisions,
+    printf("\nJetson simulee (Wi-Fi) : %s\n",
+           _opt.jetson ? "oui (positions adverses 10 Hz, recalage 1 Hz)" : "non");
+    printf("Collisions : %d, contacts entre equipes : %d, alertes : %d\n", collisions,
            contacts, alerts);
     for (const SimEvent& e : g_events) {
         if (e.kind == "log") continue;

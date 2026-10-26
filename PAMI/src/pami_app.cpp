@@ -67,7 +67,7 @@ void startMatch(App& a, uint32_t elapsedMs, const char* source) {
     }
 
     a.clock.startAt(millis(), elapsedMs);
-    a.team = readTeam();
+    a.team = a.remoteTeamSet ? a.remoteTeam : readTeam();
     a.drive.setPose(table::forTeam(a.profile->startBlue, a.team));
 
     a.state = MatchState::Running;
@@ -79,8 +79,9 @@ void startMatch(App& a, uint32_t elapsedMs, const char* source) {
 
 void endMatch(App& a, const char* reason) {
     if (a.state != MatchState::Running && a.state != MatchState::Manual) return;
-    a.strategy.stop();  // l'actionneur garde sa position
-    a.drive.stop();
+    a.strategy.stop();
+    a.drive.stop();      // moteurs coupés dès l'arrêt (voir matchUpdate)
+    a.servo.release();   // actionneur coupé (règlement H.3) : le bras reste où il est
     a.state = a.state == MatchState::Running ? MatchState::Ended
                                              : MatchState::WaitStart;
     Serial.printf("=== ARRET : %s ===\n", reason);
@@ -93,6 +94,11 @@ void matchUpdate(App& a) {
             if (a.clock.elapsedMs() >= MATCH_DURATION_MS - MATCH_END_MARGIN_MS) {
                 endMatch(a, "fin du match");
             }
+            break;
+        case MatchState::Ended:
+            // Règlement : actionneurs coupés à la fin -> moteurs non alimentés
+            // dès que le PAMI est arrêté
+            if (a.drive.powered() && !a.drive.isMoving()) a.drive.enableOutputs(false);
             break;
         case MatchState::Manual:
             a.strategy.update();

@@ -9,6 +9,7 @@ Usage (depuis le dossier PAMI) :
     python sim/run.py --size 190 95     # taille d'un PAMI (longueur largeur, mm)
     python sim/run.py --axle 0          # axe des roues par rapport au centre (mm,
                                         # + = avant, - = arriere ; defaut -85 : config.h)
+    python sim/run.py --no-jetson       # sans Jetson (pas de Wi-Fi : lidar seul)
     python sim/run.py --no-open         # ne pas ouvrir le navigateur
 
 --size et --axle remplacent les valeurs de config.h (recompilation).
@@ -31,6 +32,7 @@ OUT = SIM / "out"
 SOURCES = [
     PAMI / "src" / "pami_app.cpp",
     PAMI / "src" / "strategies.cpp",
+    PAMI / "src" / "remote.cpp",
     PAMI / "lib" / "actions" / "Actions.cpp",
     PAMI / "lib" / "strategy" / "Strategy.cpp",
     PAMI / "lib" / "drive" / "DiffDrive.cpp",

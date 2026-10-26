@@ -46,6 +46,7 @@ class DiffDrive {
     bool isBusy() const;    // consigne en cours (même en pause) ou en mouvement
     bool isMoving() const;  // les moteurs tournent
     bool isPaused() const { return _paused; }
+    bool powered() const { return _powered; }  // moteurs alimentés
 
     Pose pose() const { return _pose; }
     void setPose(const Pose& p);

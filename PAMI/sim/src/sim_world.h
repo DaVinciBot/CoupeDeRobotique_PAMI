@@ -14,6 +14,11 @@ struct SimOptions {
     float pamiLengthMm = PAMI_LENGTH_MM;  // gabarit de config.h
     float pamiWidthMm = PAMI_WIDTH_MM;
     float speedMmS = 0.0f;  // 0 = vitesse de config.h
+    // Jetson simulée (Wi-Fi) : positions adverses à 10 Hz, recalage à 1 Hz,
+    // comme si la caméra voyait tout parfaitement.
+    bool jetson = true;
+    uint32_t jetsonEnemiesPeriodMs = 100;
+    uint32_t jetsonOdometryPeriodMs = 1000;
     uint32_t recordFromMs = 84000;
     uint32_t recordPeriodMs = 20;
 };
@@ -72,6 +77,7 @@ class SimWorld {
     Box pamiBox(const SimPami& p) const;
     Box boxAt(const Pose& axle) const;
     void moveBodies();
+    void jetson(uint32_t tMs);
     void scanLidar(SimPami& p, size_t index);
     double castRay(size_t selfIndex, double ox, double oy, double dx, double dy) const;
     void checkCollisions(uint32_t tMs);

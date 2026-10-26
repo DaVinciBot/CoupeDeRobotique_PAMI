@@ -93,10 +93,14 @@ constexpr PamiProfile PAMI_PROFILES[] = {
 // ATTACK_CREEP_MM pour la toucher avant de déployer.
 constexpr float ATTACK_STOP_WITHIN_MM = LIDAR_OFFSET_X_MM + LIDAR_OBSTACLE_MM;
 constexpr float ATTACK_CREEP_MM = 80.0f;
-// Les PAMI d'attaque ne chassent qu'à partir de cet instant du match : nos
-// PAMI douve sont passés, ce que voit le lidar est alors plutôt adverse.
-// (La vraie solution : la Jetson dit qui est qui, en Wi-Fi.)
+// Sans Wi-Fi, les PAMI d'attaque ne chassent au lidar qu'à partir de cet
+// instant : nos PAMI douve sont passés, ce que voit le lidar est alors
+// plutôt adverse.
 constexpr uint32_t ATTACK_HUNT_FROM_MS = 94000;
+// Avec les positions adverses de la Jetson (Wi-Fi) : on sait qui est adverse,
+// la chasse commence dès l'arrivée dans la zone, jusqu'à cette distance.
+constexpr float ATTACK_REMOTE_RANGE_MM = 700.0f;
+constexpr uint32_t REMOTE_ENEMIES_MAX_AGE_MS = 300;  // au-delà : positions trop vieilles
 // Marge autour des obstacles fixes : un point vu à moins de cette distance
 // d'une carrière ou d'un rempart n'est pas pris pour un PAMI adverse
 // (positions relevées à +/- 20 mm, erreur du lidar et de l'odométrie).

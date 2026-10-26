@@ -12,6 +12,7 @@ Depuis le dossier `PAMI` :
 python sim/run.py                 # équipe bleue, avec adversaires
 python sim/run.py --team jaune
 python sim/run.py --no-enemies    # seulement nos PAMI seuls
+python sim/run.py --no-jetson     # sans Jetson simulée (pas de Wi-Fi : lidar seul)
 python sim/run.py --speed 250     # vitesse max des PAMI (mm/s, défaut 300)
 python sim/run.py --size 190 95   # taille d'un PAMI : longueur largeur (mm)
 python sim/run.py --axle 0        # roues au centre (défaut : -85, à l'arrière)

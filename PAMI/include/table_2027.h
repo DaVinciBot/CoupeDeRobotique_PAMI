@@ -1,6 +1,6 @@
 // Positions sur la table Eurobot 2027 (3000 x 2000 mm), relevées sur la
-// figure 8 du règlement (version beta, précision ~ +/- 20 mm, image dans
-// docs/table_2027_beta.png). À revérifier sur la version définitive.
+// figure 8 du règlement (vérifiées sur la version officielle 1.0, précision
+// ~ +/- 20 mm ; plan dans docs/table_2027.png).
 //
 // Éléments de jeu (numéros de la figure 2 du règlement) :
 //   (1) salle du trône : aire de départ des robots
@@ -120,10 +120,11 @@ constexpr Rect CARRIERES[] = {
     {2090.0f, 2415.0f, 1890.0f, 2000.0f},
 };
 
-// (4) Remparts : murailles posées sur la bande de pierres du château, à ne
-// surtout pas faire tomber. Château JAUNE (le bleu est son miroir) : 5 pans
-// d'environ 300 x 100 mm et 4 tours d'environ 100 x 100 mm, relevés sur le
-// plan annoté par l'équipe (+/- 25 mm).
+// (4) Remparts : murailles construites, à ne surtout pas faire tomber.
+// Château JAUNE (le bleu est son miroir). Règlement 2027 : un mur = 3 pierres
+// couchées empilées (320 x 110 mm au sol) dans une zone de 200 x 400 mm ; une
+// tour = 1 pierre debout (110 x 110 mm) dans un cercle de 200 mm. Positions
+// relevées sur le plan de l'équipe et le plan officiel (+/- 25 mm).
 struct Wall {
     float cx, cy;   // centre
     float angle;    // direction de la longueur (rad)
@@ -132,15 +133,15 @@ struct Wall {
 constexpr float QUARTER_TURN = 1.5707963f;
 constexpr float EIGHTH_TURN = 0.7853982f;
 constexpr Wall MURAILLES[] = {
-    {247.5f, 400.0f, 0.0f, 300.0f, 100.0f},            // pan le long de l'écurie (y petit)
-    {495.0f, 400.0f, 0.0f, 100.0f, 100.0f},            // tour
-    {672.5f, 577.5f, EIGHTH_TURN, 300.0f, 100.0f},     // pan diagonal
-    {850.0f, 755.0f, 0.0f, 100.0f, 100.0f},            // tour
-    {850.0f, 1000.0f, QUARTER_TURN, 300.0f, 100.0f},   // pan face au pont
-    {850.0f, 1245.0f, 0.0f, 100.0f, 100.0f},           // tour
-    {672.5f, 1422.5f, -EIGHTH_TURN, 300.0f, 100.0f},   // pan diagonal
-    {495.0f, 1600.0f, 0.0f, 100.0f, 100.0f},           // tour
-    {247.5f, 1600.0f, 0.0f, 300.0f, 100.0f},           // pan le long de l'écurie (y grand)
+    {247.5f, 400.0f, 0.0f, 320.0f, 110.0f},            // pan le long de l'écurie (y petit)
+    {495.0f, 400.0f, 0.0f, 110.0f, 110.0f},            // tour
+    {672.5f, 577.5f, EIGHTH_TURN, 320.0f, 110.0f},     // pan diagonal
+    {850.0f, 755.0f, 0.0f, 110.0f, 110.0f},            // tour
+    {850.0f, 1000.0f, QUARTER_TURN, 320.0f, 110.0f},   // pan face au pont
+    {850.0f, 1245.0f, 0.0f, 110.0f, 110.0f},           // tour
+    {672.5f, 1422.5f, -EIGHTH_TURN, 320.0f, 110.0f},   // pan diagonal
+    {495.0f, 1600.0f, 0.0f, 110.0f, 110.0f},           // tour
+    {247.5f, 1600.0f, 0.0f, 320.0f, 110.0f},           // pan le long de l'écurie (y grand)
 };
 
 // Point à moins de `margin` mm du bord de la table ?

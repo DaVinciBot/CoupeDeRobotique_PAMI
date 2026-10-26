@@ -16,10 +16,32 @@ Pose lidarToTable(const Pose& robot, float lx, float ly) {
     return {robot.x + c * x - s * ly, robot.y + s * x + c * ly, 0.0f};
 }
 
-// Cible = point le plus proche vu par le lidar qui n'est ni un bord de table,
-// ni une carrière, ni un rempart : en principe un PAMI adverse.
+// Cible de l'attaque :
+//  1) si la Jetson envoie les positions adverses (Wi-Fi) : le PAMI adverse le
+//     plus proche, à portée ; on sait alors qui est adversaire, on peut
+//     chasser tout de suite ;
+//  2) sinon, à partir de ATTACK_HUNT_FROM_MS : le point le plus proche vu par
+//     le lidar qui n'est ni un bord ni un obstacle connu (avant, ce serait
+//     souvent un de nos PAMI douve : le lidar ne distingue pas les équipes).
 GoTo::TargetProvider nearestEnemyCandidate(App& a) {
     return [&a](const Pose& robot, Pose& out) {
+        if (a.enemies.fresh(REMOTE_ENEMIES_MAX_AGE_MS)) {
+            float best = ATTACK_REMOTE_RANGE_MM;
+            bool found = false;
+            for (uint8_t i = 0; i < a.enemies.count; ++i) {
+                float dx = a.enemies.x[i] - robot.x, dy = a.enemies.y[i] - robot.y;
+                float d = hypotf(dx, dy);
+                if (d < best && d > 1.0f) {
+                    best = d;
+                    // viser sa face, pas son centre (stopWithin compte depuis la surface)
+                    float back = (PAMI_LENGTH_MM / 2) / d;
+                    out = {a.enemies.x[i] - dx * back, a.enemies.y[i] - dy * back, 0.0f};
+                    found = true;
+                }
+            }
+            return found;
+        }
+        if (a.clock.elapsedMs() < ATTACK_HUNT_FROM_MS) return false;
         if (!a.lidarEnabled || !a.lidar.healthy()) return false;
         constexpr float EDGE_MARGIN_MM = 40.0f;
 
@@ -141,11 +163,6 @@ void addAttack(App& a, Strategy& s) {
     toZone.finalHeading = true;
     toZone.stopWithinMm = CENTER_AHEAD_OF_AXLE_MM;
     s.add(new GoTo(a.drive, a.lidarOrNull(), zone, toZone));
-
-    // 2) Ne pas chasser avant ATTACK_HUNT_FROM_MS : avant, ce qui passe
-    //    devant le lidar est souvent un de nos PAMI douve (le lidar ne
-    //    distingue pas les équipes).
-    s.add(new WaitMatchTime(a.clock, ATTACK_HUNT_FROM_MS));
 
     // 3) Attendre qu'un PAMI adverse passe à portée du lidar (~30 cm), puis
     //    le suivre en corrigeant la direction en roulant, jusqu'à

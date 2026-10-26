@@ -49,10 +49,48 @@ CDR2027/
 
 La couleur vient de la tirette couleur (ou de `COLOR_OVERRIDE`).
 
-## Communication
+## Communication (Wi-Fi)
 
-Elle sera assurée par un **module Wi-Fi externe**, pas encore choisi : rien n'est implémenté pour l'instant.
-Quand il sera connu, `GoTo` accepte déjà une cible qui change en cours de route (`GoTo::Options::provider`).
+Les PAMI utilisent le **Wi-Fi intégré de l'ESP32-S3**, sur la **bande 2,4 GHz** du routeur
+(l'ESP32 ne capte ni le 5 GHz ni le 6 GHz : laisser le 2,4 GHz actif, idéalement avec un réseau dédié).
+Messages en **UDP**, au même format que `usb_com` / `com_pami` :
+`message | taille | CRC-8 | BA DD 1C C5`, ID 0..127 hôte → PAMI, 128..255 PAMI → hôte.
+
+**Le Wi-Fi est un plus, pas une condition** : sans lui, le PAMI part à la tirette et suit sa stratégie.
+
+| Message | Sens | Effet sur le PAMI |
+|---|---|---|
+| `MATCH_START` | hôte → PAMI | départ (ou resynchronisation de l'horloge si déjà parti) |
+| `SET_ODOMETRIE` | hôte → PAMI | recalage sur la position vue par la caméra |
+| `ENEMY_POSITIONS` | hôte → PAMI | positions adverses : l'attaque sait qui viser (plus de tir sur un coéquipier) |
+| `STOP_PAMI` | hôte → PAMI | arrêt immédiat |
+| `SET_TEAM` | hôte → PAMI | couleur (remplace la tirette couleur) |
+| `RESET_PAMI` | hôte → PAMI | redémarrage |
+| `HELLO` | PAMI → hôte | « je suis là », diffusé chaque seconde tant que l'hôte ne s'est pas manifesté |
+| `UPDATE_PAMI` | PAMI → hôte | état, temps de match et position, 10 fois par seconde |
+
+Chaque message vers un PAMI porte son numéro (0 = tous). Détail des champs :
+[PAMI/lib/com/PamiMessages.h](PAMI/lib/com/PamiMessages.h). Ports : les PAMI écoutent sur **5005**, l'hôte sur **5006**.
+
+**Mise en route :**
+
+1. Copier `PAMI/include/wifi_secrets.example.h` en `PAMI/include/wifi_secrets.h` (ignoré par git)
+   et y mettre le nom et le mot de passe du réseau 2,4 GHz. Sans ce fichier, le Wi-Fi est désactivé.
+2. Flasher. Au démarrage, la console affiche `[WiFi] connecte, IP ...`.
+3. Côté Jetson / Pi / PC, l'outil Python (même format, à garder aligné) :
+
+```bash
+cd PAMI
+python tools/pami_wifi.py listen              # HELLO puis états des PAMI
+python tools/pami_wifi.py start               # départ de tous les PAMI
+python tools/pami_wifi.py odom 3 2700 250 3.14
+python tools/pami_wifi.py enemies 1500 800 1200 1300
+```
+
+Depuis le code de la Jetson : `from pami_wifi import PamiLink, match_start, enemy_positions, ...`.
+
+La simulation joue le rôle de la Jetson (positions adverses à 10 Hz, recalage à 1 Hz) ;
+`python sim/run.py --no-jetson` montre le match sans Wi-Fi.
 
 ## Compiler et flasher
 

@@ -15,7 +15,10 @@
 constexpr uint32_t MATCH_DURATION_MS = 100000;
 constexpr uint32_t ATTACK_PHASE_START_MS = 85000;  // sortie d'écurie interdite avant
 constexpr uint32_t ATTACK_START_MARGIN_MS = 300;   // sécurité si l'horloge est en avance
-constexpr uint32_t MATCH_END_MARGIN_MS = 200;      // s'arrêter juste avant la fin
+// Règlement général H.3 : à 100 s, les robots doivent être ARRÊTÉS et leurs
+// actionneurs coupés (robot qui bouge encore : -50 points). Freiner depuis
+// 300 mm/s à 800 mm/s² prend 0,375 s : on commence 0,5 s avant la fin.
+constexpr uint32_t MATCH_END_MARGIN_MS = 500;
 
 // ============================================================
 // Brochage carte mère PAMI (DocVB : cdr/paris/pami/elek/motherboard-pami)
@@ -115,8 +118,8 @@ constexpr uint8_t LIDAR_FALLBACK_B_LAST = 159;
 // ============================================================
 constexpr int COLOR_OVERRIDE = 0;
 
-// Communication : assurée par un module Wi-Fi externe (pas encore choisi),
-// à intégrer quand il sera connu. En attendant, départ à la tirette.
+// Communication : Wi-Fi intégré (2,4 GHz), voir include/wifi_config.h et
+// lib/com. Facultatif : sans Wi-Fi, départ à la tirette.
 
 // ============================================================
 // Debug

@@ -13,6 +13,7 @@ void setup() {
     delay(500);
     Serial.println();
     appBegin(app, PAMI_ID, LidarSerial);
+    wifiBegin(app);  // facultatif : sans Wi-Fi, le PAMI marche seul
     Serial.println("Attente tirette. Tapez \"help\" pour la console.");
 }
 
@@ -24,5 +25,6 @@ void loop() {
     }
 
     consoleUpdate(app);
+    wifiUpdate(app);
     matchUpdate(app);
 }

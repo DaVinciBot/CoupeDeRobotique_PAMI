@@ -188,3 +188,6 @@ $RECYCLE.BIN/
 
 # Simulation PAMI (fichiers generes)
 PAMI/sim/out/
+
+# Identifiants Wi-Fi des PAMI (voir PAMI/include/wifi_secrets.example.h)
+PAMI/include/wifi_secrets.h
