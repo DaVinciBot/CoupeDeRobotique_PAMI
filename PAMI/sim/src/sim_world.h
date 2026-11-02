@@ -1,5 +1,5 @@
 // Monde simulé : table, carrières, murailles, PAMI des deux équipes (tous
-// avec le vrai code), lidar simulé, détection des collisions, enregistrement.
+// avec le vrai code), capteurs ToF simulés, détection des collisions, enregistrement.
 #pragma once
 
 #include <set>
@@ -66,7 +66,7 @@ class SimWorld {
     std::vector<SimPami>& pamis() { return _pamis; }
 
     enum Flags : int {
-        FLAG_OBSTACLE = 1,   // le lidar voit quelque chose dans le couloir
+        FLAG_OBSTACLE = 1,   // les capteurs voient quelque chose dans le couloir
         FLAG_COLLISION = 2,  // touche un obstacle, un bord ou un autre PAMI
         FLAG_PAUSED = 4,     // évitement en cours
         FLAG_MOVING = 8,
@@ -78,7 +78,7 @@ class SimWorld {
     Box boxAt(const Pose& axle) const;
     void moveBodies();
     void jetson(uint32_t tMs);
-    void scanLidar(SimPami& p, size_t index);
+    void scanTof(SimPami& p, size_t index);
     double castRay(size_t selfIndex, double ox, double oy, double dx, double dy) const;
     void checkCollisions(uint32_t tMs);
     void checkStables(uint32_t tMs);

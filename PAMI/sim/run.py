@@ -9,7 +9,7 @@ Usage (depuis le dossier PAMI) :
     python sim/run.py --size 190 95     # taille d'un PAMI (longueur largeur, mm)
     python sim/run.py --axle 0          # axe des roues par rapport au centre (mm,
                                         # + = avant, - = arriere ; defaut -85 : config.h)
-    python sim/run.py --no-jetson       # sans Jetson (pas de Wi-Fi : lidar seul)
+    python sim/run.py --no-jetson       # sans Jetson (pas de Wi-Fi : capteurs seuls)
     python sim/run.py --no-open         # ne pas ouvrir le navigateur
 
 --size et --axle remplacent les valeurs de config.h (recompilation).
@@ -37,12 +37,14 @@ SOURCES = [
     PAMI / "lib" / "strategy" / "Strategy.cpp",
     PAMI / "lib" / "drive" / "DiffDrive.cpp",
     PAMI / "lib" / "actuators" / "ServoPwm.cpp",
+    PAMI / "lib" / "sensors" / "ObstacleSensor.cpp",
+    PAMI / "lib" / "sensors" / "TofArray.cpp",
     SIM / "src" / "sim_hw.cpp",
     SIM / "src" / "sim_world.cpp",
     SIM / "src" / "sim_main.cpp",
 ]
 
-# sim/include en premier : il remplace Arduino.h, FastAccelStepper.h et LidarGS2.h
+# sim/include en premier : il remplace Arduino.h et FastAccelStepper.h
 INCLUDES = [
     SIM / "include",
     SIM / "src",
@@ -52,6 +54,7 @@ INCLUDES = [
     PAMI / "lib" / "actuators",
     PAMI / "lib" / "drive",
     PAMI / "lib" / "match",
+    PAMI / "lib" / "sensors",
     PAMI / "lib" / "strategy",
 ]
 

@@ -6,19 +6,19 @@
 #include "app.h"
 
 App app;
-static HardwareSerial LidarSerial(1);
 
 void setup() {
     Serial.begin(115200);
     delay(500);
     Serial.println();
-    appBegin(app, PAMI_ID, LidarSerial);
+    appBegin(app, PAMI_ID);
     wifiBegin(app);  // facultatif : sans Wi-Fi, le PAMI marche seul
     Serial.println("Attente tirette. Tapez \"help\" pour la console.");
 }
 
 void loop() {
     app.drive.update();
+    if (app.sensorsEnabled) app.tof.update();  // capteurs ToF (non bloquant)
 
     if (app.tirette.update() && app.state == MatchState::WaitStart) {
         startMatch(app, 0, "tirette");

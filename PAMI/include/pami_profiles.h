@@ -54,7 +54,7 @@ constexpr uint8_t countOf(const Waypoint (&)[N]) {
 // roule un peu plus longtemps que son voisin côté intérieur (2,5 s, 3 s,
 // 3,5 s) : quand il tourne, son voisin a déjà tourné et s'éloigne, et son
 // avant ne balaie pas la place d'un PAMI qu'il ne voit pas (hors du champ
-// du lidar). Ensuite, chacun va directement à sa cible : sans les carrières,
+// des capteurs). Ensuite, chacun va directement à sa cible : sans les carrières,
 // rien ne gêne entre l'écurie et le château adverse.
 // ------------------------------------------------------------------
 constexpr float EXIT_MAX_MM = 1200.0f;
@@ -89,12 +89,12 @@ constexpr PamiProfile PAMI_PROFILES[] = {
 };
 
 // Attaque : le PAMI s'arrête quand la cible est à cette distance de l'axe
-// des roues (lidar devant + couloir surveillé), puis avance encore de
+// des roues (capteurs devant + couloir surveillé), puis avance encore de
 // ATTACK_CREEP_MM pour la toucher avant de déployer.
-constexpr float ATTACK_STOP_WITHIN_MM = LIDAR_OFFSET_X_MM + LIDAR_OBSTACLE_MM;
+constexpr float ATTACK_STOP_WITHIN_MM = SENSOR_OFFSET_X_MM + OBSTACLE_STOP_MM;
 constexpr float ATTACK_CREEP_MM = 80.0f;
-// Sans Wi-Fi, les PAMI d'attaque ne chassent au lidar qu'à partir de cet
-// instant : nos PAMI douve sont passés, ce que voit le lidar est alors
+// Sans Wi-Fi, les PAMI d'attaque ne chassent aux capteurs qu'à partir de cet
+// instant : nos PAMI douve sont passés, ce que voient les capteurs est alors
 // plutôt adverse.
 constexpr uint32_t ATTACK_HUNT_FROM_MS = 94000;
 // Avec les positions adverses de la Jetson (Wi-Fi) : on sait qui est adverse,
@@ -103,7 +103,7 @@ constexpr float ATTACK_REMOTE_RANGE_MM = 700.0f;
 constexpr uint32_t REMOTE_ENEMIES_MAX_AGE_MS = 300;  // au-delà : positions trop vieilles
 // Marge autour des obstacles fixes : un point vu à moins de cette distance
 // d'une carrière ou d'un rempart n'est pas pris pour un PAMI adverse
-// (positions relevées à +/- 20 mm, erreur du lidar et de l'odométrie).
+// (positions relevées à +/- 20 mm, erreur des capteurs et de l'odométrie).
 constexpr float ATTACK_FIXED_OBSTACLE_MARGIN_MM = 40.0f;
 // Bloqué par un obstacle immobile depuis ce temps : contourner (reculer, se
 // décaler à droite de préférence, repartir). Court, pour ne pas perdre de
@@ -115,7 +115,7 @@ constexpr float KEEP_RIGHT_MM = 60.0f;
 // Un point de passage est « atteint » à cette distance : le PAMI enchaîne
 // alors vers le suivant en courbe, sans freiner.
 constexpr float PASS_THROUGH_MM = 100.0f;
-// Douve : à l'approche, on ignore le lidar (rempart, pierres autour des douves).
+// Douve : à l'approche, on ignore les capteurs (rempart, pierres autour des douves).
 constexpr float DOUVE_IGNORE_OBSTACLE_WITHIN_MM = 150.0f;
 
 inline const PamiProfile& pamiProfile(uint8_t id) {

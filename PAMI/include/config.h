@@ -5,6 +5,8 @@
 
 #include <Arduino.h>
 
+#include "TofArray.h"
+
 #ifndef PAMI_ID
 #define PAMI_ID 1  // fourni par l'environnement PlatformIO (pio run -e pamiN)
 #endif
@@ -39,8 +41,7 @@ constexpr uint8_t TIRETTE_PIN = 41;      // HIGH = tirette en place
 constexpr uint8_t COLOR_PIN_VCC = 14;    // sortie à HIGH
 constexpr uint8_t COLOR_PIN_READ = 15;   // HIGH = jaune, LOW = bleu
 
-constexpr int8_t LIDAR_RX_PIN = 44;  // UART0 (RX0/TX0), Serial = USB natif
-constexpr int8_t LIDAR_TX_PIN = 43;
+// Capteurs ToF (I2C) : voir la section « Capteurs d'obstacles » plus bas.
 
 // ============================================================
 // Mécanique
@@ -69,7 +70,7 @@ constexpr float WHEEL_BASE_MM = 132.0f;
 //     2,4 mm) : les PAMI douve 1 et 2 n'arrivent jamais.
 //   - roues à 85 mm derrière le centre (10 mm du bord arrière) : l'arrière
 //     déborde de 1 mm -> les 6 PAMI sortent (vérifié en simulation).
-// Mettre ici la valeur RÉELLE du PAMI construit (odométrie, lidar, arrêt
+// Mettre ici la valeur RÉELLE du PAMI construit (odométrie, capteurs, arrêt
 // sur les cibles en dépendent).
 #ifndef PAMI_AXLE_FROM_CENTER_MM
 #define PAMI_AXLE_FROM_CENTER_MM -85.0f
@@ -87,31 +88,47 @@ constexpr float DRIVE_ACCEL_MM_S2 = 800.0f;
 constexpr uint32_t GOTO_TIMEOUT_MS = 15000;
 
 // ============================================================
-// Lidar YDLIDAR GS2 (évitement)
+// Capteurs d'obstacles : ToF VL53L1X à l'avant (évitement)
 // ============================================================
-constexpr bool ENABLE_LIDAR = true;
-// Zone surveillée : couloir devant le lidar, profondeur x largeur.
-constexpr uint16_t LIDAR_OBSTACLE_MM = 220;  // face à face à 300 mm/s : 2 x 56 mm de freinage + retard
+constexpr bool ENABLE_TOF = true;
+
+// /!\ À confirmer avec l'élec et la méca (TODO) : nombre de capteurs,
+// position, orientation, broches. Valeurs provisoires, à mettre à jour
+// selon le PCB et le support des capteurs.
+constexpr int8_t TOF_SDA_PIN = 1;
+constexpr int8_t TOF_SCL_PIN = 2;
+// Point de référence des capteurs : au milieu de l'avant du PAMI, à cette
+// distance devant son centre. Positions ci-dessous en mm par rapport à ce
+// point (x vers l'avant, y vers la gauche), angle + = vers la gauche.
+constexpr float SENSOR_FROM_CENTER_MM = 85.0f;
+constexpr TofArray::Mount TOF_SENSORS[] = {
+    // XSHUT   x       y      angle
+    {4, -5.0f, -35.0f, -30.0f},  // avant droit
+    {5, 0.0f, 0.0f, 0.0f},       // avant centre
+    {6, -5.0f, 35.0f, 30.0f},    // avant gauche
+};
+constexpr uint8_t TOF_COUNT = sizeof(TOF_SENSORS) / sizeof(TOF_SENSORS[0]);
+// Cône de chaque capteur : resserré à ~15° (zone de 4 x 4 SPAD au lieu de
+// 16 x 16, ~27°). À 27°, en longeant le bord de la table à 50 mm (PAMI
+// contre le bord de l'écurie), le capteur central voit la bordure à 214 mm
+// et le PAMI ne sort jamais (vu en simulation).
+constexpr uint8_t TOF_ROI_SPADS = 4;
+constexpr float TOF_FOV_DEG = 15.0f;  // cône correspondant (simulation, affichage)
+constexpr uint16_t TOF_MAX_MM = 600;  // au-delà : on considère qu'il n'y a rien
+
+// Zone surveillée : couloir devant le point de référence, profondeur x largeur.
+constexpr uint16_t OBSTACLE_STOP_MM = 220;  // face à face à 300 mm/s : 2 x 56 mm de freinage + retard
 // Demi-largeur du couloir : à peine plus que le PAMI. Dans l'écurie, le
 // voisin est à 52 mm de l'axe : plus large, le PAMI le verrait et ne
 // sortirait jamais (idem le long du bord de la table).
-constexpr uint16_t LIDAR_CORRIDOR_HALF_WIDTH_MM = (uint16_t)(PAMI_WIDTH_MM / 2 + 2);
-// Position du lidar devant le centre du PAMI. TODO mesurer.
-constexpr float LIDAR_FROM_CENTER_MM = 60.0f;
-// ... et donc devant l'axe des roues (sert à placer les points sur la table)
-constexpr float LIDAR_OFFSET_X_MM = LIDAR_FROM_CENTER_MM - PAMI_AXLE_FROM_CENTER_MM;
+constexpr uint16_t OBSTACLE_CORRIDOR_HALF_MM = (uint16_t)(PAMI_WIDTH_MM / 2 + 2);
+// Point de référence des capteurs devant l'axe des roues (sert à placer
+// les points sur la table)
+constexpr float SENSOR_OFFSET_X_MM = SENSOR_FROM_CENTER_MM - PAMI_AXLE_FROM_CENTER_MM;
 // Distance entre l'axe des roues et le centre du PAMI quand l'axe est à
 // l'arrière : pour que le PAMI (et pas son axe) arrive sur une cible.
 constexpr float CENTER_AHEAD_OF_AXLE_MM =
     PAMI_AXLE_FROM_CENTER_MM < 0.0f ? -PAMI_AXLE_FROM_CENTER_MM : 0.0f;
-// Gauche/droite : mettre la main à gauche du PAMI, "lidar" doit donner y > 0.
-constexpr bool LIDAR_Y_LEFT_POSITIVE = true;
-// Indices "devant" utilisés seulement si le lidar ne donne pas sa
-// calibration (repris du code 2026).
-constexpr uint8_t LIDAR_FALLBACK_A_FIRST = 0;
-constexpr uint8_t LIDAR_FALLBACK_A_LAST = 20;
-constexpr uint8_t LIDAR_FALLBACK_B_FIRST = 140;
-constexpr uint8_t LIDAR_FALLBACK_B_LAST = 159;
 
 // ============================================================
 // Couleur : 0 = tirette couleur, 1 = jaune forcé, -1 = bleu forcé

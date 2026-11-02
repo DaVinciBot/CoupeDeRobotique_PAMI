@@ -12,7 +12,7 @@ void applyRoleIdlePosition(App& a) {
     if (a.role == Role::Attack) a.servo.write(ATTACK_SERVO_REST_DEG);
 }
 
-void appBegin(App& a, uint8_t pamiId, HardwareSerial& lidarSerial) {
+void appBegin(App& a, uint8_t pamiId) {
     a.profile = &pamiProfile(pamiId);
     a.role = a.profile->role;
 
@@ -40,18 +40,17 @@ void appBegin(App& a, uint8_t pamiId, HardwareSerial& lidarSerial) {
     pinMode(COLOR_PIN_READ, INPUT_PULLDOWN);
     a.tirette.begin(TIRETTE_PIN);
 
-    if (ENABLE_LIDAR) {
-        LidarGS2::Config lc;
-        lc.rxPin = LIDAR_RX_PIN;
-        lc.txPin = LIDAR_TX_PIN;
-        lc.obstacleMm = LIDAR_OBSTACLE_MM;
-        lc.corridorHalfWidthMm = LIDAR_CORRIDOR_HALF_WIDTH_MM;
-        lc.yLeftPositive = LIDAR_Y_LEFT_POSITIVE;
-        lc.fallbackFront[0] = {LIDAR_FALLBACK_A_FIRST, LIDAR_FALLBACK_A_LAST};
-        lc.fallbackFront[1] = {LIDAR_FALLBACK_B_FIRST, LIDAR_FALLBACK_B_LAST};
-        a.lidar.begin(lidarSerial, lc);
-        a.lidar.startTask(0);
-        a.lidarEnabled = true;
+    if (ENABLE_TOF) {
+        TofArray::Config tc;
+        tc.sensors = TOF_SENSORS;
+        tc.count = TOF_COUNT;
+        tc.sdaPin = TOF_SDA_PIN;
+        tc.sclPin = TOF_SCL_PIN;
+        tc.maxMm = TOF_MAX_MM;
+        tc.roiSpads = TOF_ROI_SPADS;
+        tc.detection.obstacleMm = OBSTACLE_STOP_MM;
+        tc.detection.corridorHalfWidthMm = OBSTACLE_CORRIDOR_HALF_MM;
+        a.sensorsEnabled = a.tof.begin(tc) > 0;
     }
 
     Serial.printf("=== PAMI %u pret : role %s, micropas 1/%u, couleur lue %s ===\n",

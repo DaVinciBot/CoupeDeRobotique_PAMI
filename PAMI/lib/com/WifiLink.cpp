@@ -55,11 +55,6 @@ void WifiLink::update() {
     }
 }
 
-void WifiLink::dispatch(const uint8_t* msg, size_t size) {
-    uint8_t id = msg[0];
-    if (_handlers[id]) _handlers[id](msg, size);
-}
-
 bool WifiLink::send(const void* message, size_t size) {
     if (!_udpStarted) return false;
     size_t len = pami_frame::encode(message, size, _tx);

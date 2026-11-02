@@ -70,7 +70,7 @@
       <option value="avec">avec (6 contre 6)</option>
       <option value="sans">sans</option>
     </select></label>
-  <label class="toggle"><input type="checkbox" id="showLidar" checked> lidar</label>
+  <label class="toggle"><input type="checkbox" id="showLidar" checked> capteurs ToF</label>
   <label class="toggle"><input type="checkbox" id="showTrails" checked> traces</label>
   <label class="toggle"><input type="checkbox" id="showTargets" checked> trajets prévus</label>
   <label class="toggle"><input type="checkbox" id="showObstacles"> carrières</label>
@@ -208,10 +208,14 @@
         if (!b.target) return;
         const path = [b.start].concat(b.route || [], [b.target]);
         const [u1, v1] = px(b.target[0], b.target[1]);
-        ctx.setLineDash([5, 5]);
-        ctx.strokeStyle = "rgba(255,255,255,.75)"; ctx.lineWidth = 1.2;
         ctx.beginPath();
         path.forEach(([x, y], k) => { const [u, v] = px(x, y); k ? ctx.lineTo(u, v) : ctx.moveTo(u, v); });
+        ctx.lineJoin = "round";
+        ctx.setLineDash([]);
+        ctx.strokeStyle = "rgba(0,0,0,.45)"; ctx.lineWidth = 4.5;  // liseré sombre
+        ctx.stroke();
+        ctx.setLineDash([10, 7]);
+        ctx.strokeStyle = "rgba(255,255,255,.95)"; ctx.lineWidth = 2.5;
         ctx.stroke();
         ctx.setLineDash([]);
         ctx.strokeStyle = palette[i]; ctx.lineWidth = 2.5;
@@ -231,8 +235,11 @@
           const [u, v] = px(b.x, b.y);
           k ? ctx.lineTo(u, v) : ctx.moveTo(u, v);
         }
-        ctx.strokeStyle = palette[i]; ctx.globalAlpha = .55; ctx.lineWidth = 2;
-        ctx.setLineDash([]); ctx.stroke(); ctx.globalAlpha = 1;
+        ctx.setLineDash([]); ctx.lineJoin = "round"; ctx.lineCap = "round";
+        ctx.strokeStyle = "rgba(0,0,0,.5)"; ctx.lineWidth = 7;  // liseré sombre
+        ctx.stroke();
+        ctx.strokeStyle = palette[i]; ctx.globalAlpha = .9; ctx.lineWidth = 4.5;
+        ctx.stroke(); ctx.globalAlpha = 1;
       }
     }
 
@@ -244,12 +251,16 @@
       const front = D.pami.length / 2 - ax, back = -D.pami.length / 2 - ax;
 
       if ($("showLidar").checked && !(b.flags & 16)) {
-        const off = D.pami.lidarOffset, R = D.pami.lidarRange, half = D.pami.lidarFovDeg / 2 * Math.PI / 180;
-        const wedge = [local(b, off, 0)];
-        for (let a = -half; a <= half + 1e-6; a += half / 12) {
-          wedge.push(local(b, off + R * Math.cos(a), R * Math.sin(a)));
-        }
-        poly(wedge, "rgba(255,255,255,.12)", null);
+        // cône de chaque capteur ToF (position et angle dans le repère des capteurs)
+        const off = D.pami.sensorOffset, R = D.pami.tofRange, half = D.pami.tofFovDeg / 2 * Math.PI / 180;
+        (D.pami.tof || []).forEach(([sx, sy, deg]) => {
+          const axis = deg * Math.PI / 180, ox = off + sx, oy = sy;
+          const cone = [local(b, ox, oy)];
+          for (let a = axis - half; a <= axis + half + 1e-6; a += half / 4) {
+            cone.push(local(b, ox + R * Math.cos(a), oy + R * Math.sin(a)));
+          }
+          poly(cone, "rgba(255,255,255,.10)", "rgba(255,255,255,.25)", 0.8);
+        });
         const dd = D.pami.corridorDepth, ch = D.pami.corridorHalf;
         const obstacle = b.flags & 1;
         poly([local(b, off, -ch), local(b, off + dd, -ch), local(b, off + dd, ch), local(b, off, ch)],

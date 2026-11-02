@@ -23,12 +23,12 @@ void Forward::update() {
         return;
     }
 
-    // Le lidar ne voit que devant
-    if (_mm > 0 && _lidar != nullptr && _lidar->healthy()) {
-        bool obstacle = _lidar->obstacle();
+    // Les capteurs ne voit que devant
+    if (_mm > 0 && _sensor != nullptr && _sensor->healthy()) {
+        bool obstacle = _sensor->obstacle();
         // Ce n'est qu'un obstacle connu (carrière...) : il ne bougera pas,
         // inutile d'attendre, on s'arrête là et on passe à la suite.
-        if (obstacle && _isKnown && !unknownObstacleAhead(*_lidar, _drive.pose(), _isKnown)) {
+        if (obstacle && _isKnown && !unknownObstacleAhead(*_sensor, _drive.pose(), _isKnown)) {
             _timeUp = true;
             _drive.stop();
             return;
@@ -104,14 +104,14 @@ void GoTo::finish() {
     }
 }
 
-bool unknownObstacleAhead(const LidarGS2& lidar, const Pose& robot,
+bool unknownObstacleAhead(const ObstacleSensor& sensor, const Pose& robot,
                           const KnownObstacleFilter& isKnown) {
     if (!isKnown) return true;
-    LidarPoint pts[LidarGS2::POINT_COUNT];
-    lidar.copyPoints(pts);
-    const float half = lidar.corridorHalfWidth();
-    const float depth = lidar.obstacleThreshold();
-    for (const LidarPoint& lp : pts) {
+    ObstaclePoint pts[ObstacleSensor::MAX_POINTS] = {};  // au-delà des points : non valides
+    sensor.copyPoints(pts);
+    const float half = sensor.corridorHalfWidth();
+    const float depth = sensor.obstacleThreshold();
+    for (const ObstaclePoint& lp : pts) {
         if (!lp.valid || !lp.confirmed) continue;
         if (fabsf(lp.y) > half || lp.x >= depth) continue;
         if (!isKnown(robot, lp.x, lp.y)) return true;
@@ -120,8 +120,8 @@ bool unknownObstacleAhead(const LidarGS2& lidar, const Pose& robot,
 }
 
 bool GoTo::obstacleAhead() const {
-    if (_lidar == nullptr || !_lidar->healthy() || !_lidar->obstacle()) return false;
-    return unknownObstacleAhead(*_lidar, _drive.pose(), _opt.isKnownObstacle);
+    if (_sensor == nullptr || !_sensor->healthy() || !_sensor->obstacle()) return false;
+    return unknownObstacleAhead(*_sensor, _drive.pose(), _opt.isKnownObstacle);
 }
 
 // Interroge `provider` au plus une fois par retargetPeriodMs.
@@ -250,8 +250,8 @@ void GoTo::update() {
             bool obstacle = obstacleAhead() && d >= _opt.ignoreObstacleWithinMm;
             // Suivi : un PAMI devant qui avance aussi vite que nous n'est pas
             // une raison de s'arrêter, tant qu'on reste à followMinMm.
-            if (obstacle && _opt.follow && !_drive.isPaused() && _lidar != nullptr &&
-                _lidar->frontMinMm() >= _opt.followMinMm &&
+            if (obstacle && _opt.follow && !_drive.isPaused() && _sensor != nullptr &&
+                _sensor->frontMinMm() >= _opt.followMinMm &&
                 _closingMmS < _opt.followClosingMmS) {
                 obstacle = false;
             }
@@ -262,7 +262,7 @@ void GoTo::update() {
                 // Bloqué trop longtemps par un obstacle qui ne s'éloigne pas :
                 // contourner. Un obstacle qui s'éloigne est un PAMI qu'on suit :
                 // on attend qu'il avance.
-                uint16_t front = _lidar != nullptr ? _lidar->frontMinMm() : 0xFFFF;
+                uint16_t front = _sensor != nullptr ? _sensor->frontMinMm() : 0xFFFF;
                 if (!obstacle) {
                     _blockedSinceMs = 0;
                 } else if (_blockedSinceMs == 0) {
@@ -346,29 +346,29 @@ bool GoTo::lineIsFree(const Pose& from, const Pose& to) const {
 }
 
 bool GoTo::startBypass() {
-    if (_lidar == nullptr || !_lidar->healthy()) return false;
+    if (_sensor == nullptr || !_sensor->healthy()) return false;
     if (_bypassing) {  // de nouveau bloqué en contournant : recalculer d'ici
         _bypassing = false;
         _target = _savedTarget;
         _opt.stopWithinMm = _savedStopWithinMm;
     }
 
-    // Où est l'obstacle ? Points du lidar (hors obstacles connus) devant nous
-    LidarPoint pts[LidarGS2::POINT_COUNT];
-    _lidar->copyPoints(pts);
+    // Où est l'obstacle ? Points des capteurs (hors obstacles connus) devant nous
+    ObstaclePoint pts[ObstacleSensor::MAX_POINTS] = {};  // au-delà des points : non valides
+    _sensor->copyPoints(pts);
     const Pose p = _drive.pose();
     float front = 1e9f, yMin = 1e9f, yMax = -1e9f;
-    for (const LidarPoint& lp : pts) {
+    for (const ObstaclePoint& lp : pts) {
         if (!lp.valid || !lp.confirmed) continue;
         if (_opt.isKnownObstacle && _opt.isKnownObstacle(p, lp.x, lp.y)) continue;
         if (fabsf(lp.y) > 250.0f) continue;
         front = min(front, lp.x);
     }
     if (front > 1e8f) {
-        Serial.println("[GoTo] contournement : obstacle introuvable dans le lidar");
+        Serial.println("[GoTo] contournement : obstacle introuvable dans les capteurs");
         return false;
     }
-    for (const LidarPoint& lp : pts) {  // ses côtés : points proches de sa face avant
+    for (const ObstaclePoint& lp : pts) {  // ses côtés : points proches de sa face avant
         if (!lp.valid || !lp.confirmed || lp.x > front + 120.0f || fabsf(lp.y) > 250.0f) continue;
         if (_opt.isKnownObstacle && _opt.isKnownObstacle(p, lp.x, lp.y)) continue;
         yMin = min(yMin, lp.y);
@@ -383,7 +383,7 @@ bool GoTo::startBypass() {
     const float beyonds[2] = {_opt.bypassBeyondMm, _opt.bypassBeyondMm * 0.6f};
     for (int variant = 0; variant < 4; ++variant)
     for (float side : {-1.0f, 1.0f}) {  // droite d'abord (y < 0 = droite)
-        const float ahead = _opt.lidarOffsetMm + front + beyonds[variant / 2];
+        const float ahead = _opt.sensorOffsetMm + front + beyonds[variant / 2];
         const float offset = _opt.halfWidthMm + clearances[variant % 2];
         float lateral = side < 0 ? yMin - offset : yMax + offset;
         Pose b = {p.x + c * ahead - s * lateral, p.y + s * ahead + c * lateral, 0.0f};
@@ -450,16 +450,16 @@ void GoTo::waitThenReplan() {
 // Esquive en S
 // ------------------------------------------------------------------
 
-// À chaque nouvelle trame lidar : à quelle vitesse l'obstacle devant se
+// À chaque nouvelle trame des capteurs : à quelle vitesse l'obstacle devant se
 // rapproche-t-il, et se rapproche-t-il plus que la distance que nous avons
 // parcourue (il vient vers nous) ?
 void GoTo::trackFront() {
-    if (_lidar == nullptr || !_lidar->healthy()) return;
-    uint32_t frame = _lidar->stats().frames;
-    if (frame == _lastLidarFrame) return;
-    _lastLidarFrame = frame;
+    if (_sensor == nullptr || !_sensor->healthy()) return;
+    uint32_t frame = _sensor->frames();
+    if (frame == _lastSensorFrame) return;
+    _lastSensorFrame = frame;
 
-    uint16_t front = _lidar->frontMinMm();
+    uint16_t front = _sensor->frontMinMm();
     Pose p = _drive.pose();
     uint32_t now = millis();
     if (front != 0xFFFF && _prevFrontMm != 0xFFFF) {
@@ -523,8 +523,8 @@ bool GoTo::startDodge() {
 
 void GoTo::updateDodge() {
     // Sécurité : s'il est malgré tout trop près, pause le temps qu'il passe
-    if (_lidar != nullptr && _lidar->healthy()) {
-        bool tooClose = _lidar->frontMinMm() < _opt.dodgeAbortMm;
+    if (_sensor != nullptr && _sensor->healthy()) {
+        bool tooClose = _sensor->frontMinMm() < _opt.dodgeAbortMm;
         if (tooClose && !_drive.isPaused()) _drive.pause();
         if (!tooClose && _drive.isPaused()) _drive.resume();
     }

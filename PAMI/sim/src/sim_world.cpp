@@ -9,8 +9,8 @@
 namespace {
 
 const double INF = std::numeric_limits<double>::infinity();
-const double LIDAR_FOV_DEG = 100.0;  // champ du GS2
-const uint32_t LIDAR_PERIOD_MS = 35;  // ~28 trames/s
+const uint32_t TOF_PERIOD_MS = 20;  // VL53L1X : 50 mesures/s (budget de 20 ms)
+const int TOF_CONE_RAYS = 9;         // rayons simulés dans le cône de chaque capteur
 const uint32_t COLLISION_PERIOD_MS = 10;
 
 struct Pt {
@@ -81,7 +81,7 @@ double rayBox(double ox, double oy, double dx, double dy, const Box& b) {
         }
     }
     if (tMax < 0) return INF;
-    return tMin > 0 ? tMin : 0.0;  // 0 : le lidar est dedans
+    return tMin > 0 ? tMin : 0.0;  // 0 : le capteur est dedans
 }
 
 // Bordures de la table (vues de l'intérieur)
@@ -242,9 +242,9 @@ void SimWorld::step(uint32_t tMs) {
     moveBodies();
     if (_opt.jetson) jetson(tMs);
 
-    if (tMs % LIDAR_PERIOD_MS == 0) {
+    if (tMs % TOF_PERIOD_MS == 0) {
         for (size_t i = 0; i < _pamis.size(); ++i) {
-            if (_pamis[i].app->lidarEnabled) scanLidar(_pamis[i], i);
+            if (_pamis[i].app->sensorsEnabled) scanTof(_pamis[i], i);
         }
     }
     if (tMs % COLLISION_PERIOD_MS == 0) {
@@ -269,34 +269,28 @@ double SimWorld::castRay(size_t self, double ox, double oy, double dx, double dy
     return best;
 }
 
-void SimWorld::scanLidar(SimPami& p, size_t index) {
-    const LidarGS2::Config& cfg = p.app->lidar.simConfig();
-    const uint16_t N = LidarGS2::POINT_COUNT;
-    Pose q = p.truePose;  // le lidar voit depuis là où le PAMI est vraiment
-    double ox = q.x + LIDAR_OFFSET_X_MM * cos(q.theta);
-    double oy = q.y + LIDAR_OFFSET_X_MM * sin(q.theta);
-
-    uint16_t dist[N];
-    LidarPoint pts[N];
-    for (uint16_t k = 0; k < N; ++k) {
-        // indice 0 = côté droit (y < 0), comme la caméra 0 du GS2
-        double a = (-LIDAR_FOV_DEG / 2 + k * LIDAR_FOV_DEG / (N - 1)) * DEG_TO_RAD;
-        double d = castRay(index, ox, oy, cos(q.theta + a), sin(q.theta + a));
-        bool inRange = d > cfg.minMm && d < cfg.maxMm;
-        dist[k] = inRange ? (uint16_t)d : 0;
-        pts[k] = {(float)(d * cos(a)), (float)(d * sin(a)), inRange, false};
-    }
-    // Point confirmé si un voisin est proche (comme le filtre du vrai driver)
-    const float tol2 = (float)cfg.spikeToleranceMm * cfg.spikeToleranceMm;
-    for (uint16_t k = 0; k < N; ++k) {
-        if (!pts[k].valid) continue;
-        for (int j : {(int)k - 1, (int)k + 1}) {
-            if (j < 0 || j >= N || !pts[j].valid) continue;
-            float dx = pts[k].x - pts[j].x, dy = pts[k].y - pts[j].y;
-            if (dx * dx + dy * dy <= tol2) pts[k].confirmed = true;
+// Chaque VL53L1X voit l'objet le plus proche dans son cône : on lance
+// quelques rayons dans le cône et on garde la plus courte distance.
+void SimWorld::scanTof(SimPami& p, size_t index) {
+    TofArray& tof = p.app->tof;
+    const TofArray::Config& cfg = tof.config();
+    const Pose q = p.truePose;  // les capteurs voient depuis là où le PAMI est vraiment
+    const double c = cos(q.theta), s = sin(q.theta);
+    const double halfFov = TOF_FOV_DEG / 2 * DEG_TO_RAD;
+    for (uint8_t i = 0; i < cfg.count; ++i) {
+        const TofArray::Mount& m = cfg.sensors[i];
+        double lx = SENSOR_OFFSET_X_MM + m.x, ly = m.y;  // repère PAMI (axe des roues)
+        double ox = q.x + c * lx - s * ly, oy = q.y + s * lx + c * ly;
+        double axis = q.theta + m.angleDeg * DEG_TO_RAD;
+        double best = 1e9;
+        for (int k = 0; k < TOF_CONE_RAYS; ++k) {
+            double a = axis - halfFov + k * 2 * halfFov / (TOF_CONE_RAYS - 1);
+            best = std::min(best, castRay(index, ox, oy, cos(a), sin(a)));
         }
+        bool seen = best >= cfg.minMm && best <= cfg.maxMm;
+        tof.setReading(i, seen ? (uint16_t)best : 0, seen);
     }
-    p.app->lidar.simSetScan(dist, pts);
+    tof.process();
 }
 
 void SimWorld::checkCollisions(uint32_t) {
@@ -395,7 +389,7 @@ void SimWorld::record(uint32_t tMs) {
         App& a = *_pamis[i].app;
         Pose q = _pamis[i].truePose;
         int flags = 0;
-        if (a.lidarEnabled && a.lidar.obstacle()) flags |= FLAG_OBSTACLE;
+        if (a.sensorsEnabled && a.tof.obstacle()) flags |= FLAG_OBSTACLE;
         if (_collisionFlags[i]) flags |= FLAG_COLLISION;
         if (a.drive.isPaused()) flags |= FLAG_PAUSED;
         if (a.drive.isMoving()) flags |= FLAG_MOVING;
@@ -418,12 +412,18 @@ bool SimWorld::writeOutput(const char* path, const char* name) const {
     fprintf(f, "\"table\": {\"length\": %.0f, \"width\": %.0f},\n", table::LENGTH_MM,
             table::WIDTH_MM);
     fprintf(f,
-            "\"pami\": {\"length\": %.0f, \"width\": %.0f, \"lidarOffset\": %.0f, "
-            "\"lidarRange\": %u, \"lidarFovDeg\": %.0f, \"corridorDepth\": %u, "
-            "\"corridorHalf\": %u, \"axle\": %.0f},\n",
-            _opt.pamiLengthMm, _opt.pamiWidthMm, LIDAR_OFFSET_X_MM, 300u, LIDAR_FOV_DEG,
-            (unsigned)LIDAR_OBSTACLE_MM, (unsigned)LIDAR_CORRIDOR_HALF_WIDTH_MM,
+            "\"pami\": {\"length\": %.0f, \"width\": %.0f, \"sensorOffset\": %.0f, "
+            "\"tofRange\": %u, \"tofFovDeg\": %.0f, \"corridorDepth\": %u, "
+            "\"corridorHalf\": %u, \"axle\": %.0f, \"tof\": [",
+            _opt.pamiLengthMm, _opt.pamiWidthMm, SENSOR_OFFSET_X_MM, (unsigned)TOF_MAX_MM,
+            TOF_FOV_DEG, (unsigned)OBSTACLE_STOP_MM, (unsigned)OBSTACLE_CORRIDOR_HALF_MM,
             (double)PAMI_AXLE_FROM_CENTER_MM);
+    // capteurs : position (repère capteurs) et orientation
+    for (uint8_t i = 0; i < TOF_COUNT; ++i) {
+        fprintf(f, "%s[%.0f,%.0f,%.0f]", i ? "," : "", TOF_SENSORS[i].x, TOF_SENSORS[i].y,
+                TOF_SENSORS[i].angleDeg);
+    }
+    fprintf(f, "]},\n");
     fprintf(f, "\"attackPhaseMs\": %u, \"matchMs\": %u, \"jetson\": %s,\n",
             (unsigned)ATTACK_PHASE_START_MS, (unsigned)MATCH_DURATION_MS,
             _opt.jetson ? "true" : "false");

@@ -5,7 +5,7 @@
 #include <Arduino.h>
 
 #include "DiffDrive.h"
-#include "LidarGS2.h"
+#include "TofArray.h"
 #include "MatchClock.h"
 #include "ServoPwm.h"
 #include "Strategy.h"
@@ -32,7 +32,7 @@ struct RemoteEnemies {
 
 struct App {
     DiffDrive drive;
-    LidarGS2 lidar;
+    TofArray tof;  // capteurs d'obstacles (ToF)
     ServoPwm servo;
     MatchClock clock;
     Tirette tirette;
@@ -42,20 +42,20 @@ struct App {
     Role role = Role::Test;
     Team team = Team::Blue;
     MatchState state = MatchState::WaitStart;
-    bool lidarEnabled = false;
+    bool sensorsEnabled = false;
 
     // Reçu en Wi-Fi (remote.cpp)
     RemoteEnemies enemies;
     bool remoteTeamSet = false;  // couleur imposée par l'hôte
     Team remoteTeam = Team::Blue;
 
-    const LidarGS2* lidarOrNull() const { return lidarEnabled ? &lidar : nullptr; }
+    const ObstacleSensor* sensorsOrNull() const { return sensorsEnabled ? &tof : nullptr; }
 };
 
 extern App app;
 
 // pami_app.cpp
-void appBegin(App& a, uint8_t pamiId, HardwareSerial& lidarSerial);
+void appBegin(App& a, uint8_t pamiId);
 void matchUpdate(App& a);  // à chaque tour de boucle, après drive.update()
 void startMatch(App& a, uint32_t elapsedMs, const char* source);
 void endMatch(App& a, const char* reason);

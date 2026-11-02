@@ -1,4 +1,6 @@
 // Messages échangés en Wi-Fi (UDP) entre la Jetson (ou le Pi) et les PAMI.
+// Sur le PAMI, ils passent par l'UART vers la passerelle Wi-Fi 6E (UartLink),
+// ou par le Wi-Fi intégré de l'ESP32 (WifiLink).
 //
 // Même convention que usb_com / com_pami (dépôt CoupeDeRobotique) :
 //   - ID 0..127   : hôte (Jetson, Pi) -> PAMI
@@ -39,6 +41,10 @@ enum : uint8_t {
     // PAMI -> hôte
     UPDATE_PAMI = 128,  // état périodique (10 Hz)
     HELLO = 130,        // « je suis là » (diffusé tant que l'hôte n'a rien envoyé)
+
+    // passerelle Wi-Fi 6E -> ESP32, sur l'UART seulement (jamais en Wi-Fi)
+    BRIDGE_STATUS = 200,
+
     PRINT = 254,
     UNKNOWN_MSG_TYPE = 255,
 };
@@ -94,6 +100,14 @@ struct MsgHello {
     uint8_t pami_id;
     uint8_t role;  // 0 test, 1 douve, 2 attaque
     uint8_t team;
+};
+
+// Envoyé par la passerelle toutes les 500 ms sur l'UART (voir BRIDGE.md)
+struct MsgBridgeStatus {
+    uint8_t command = BRIDGE_STATUS;
+    uint8_t wifi_connected;  // 1 : réseau joint
+    uint8_t host_known;      // 1 : l'hôte a déjà envoyé un message
+    int8_t rssi;             // dBm (0 si inconnu)
 };
 
 struct MsgUnknownMsgType {

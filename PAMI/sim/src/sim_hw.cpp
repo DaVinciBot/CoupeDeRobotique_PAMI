@@ -1,5 +1,5 @@
 // Simulation : implémentation des remplaçants du matériel
-// (temps, broches, port série, moteurs pas à pas, lidar).
+// (temps, broches, port série, moteurs pas à pas, capteurs ToF).
 #include <stdarg.h>
 
 #include <map>
@@ -7,7 +7,7 @@
 
 #include "Arduino.h"
 #include "FastAccelStepper.h"
-#include "LidarGS2.h"
+#include "TofArray.h"
 #include "sim_log.h"
 
 // ------------------------------------------------------------------
@@ -132,67 +132,13 @@ void FastAccelStepper::simStep(double dtS) {
 }
 
 // ------------------------------------------------------------------
-// Lidar : même logique de détection que lib/lidar/LidarGS2.cpp
+// Capteurs ToF : la géométrie et la détection sont celles du robot
+// (lib/sensors/TofArray.cpp, ObstacleSensor.cpp). Seule la partie I2C est
+// remplacée : les distances viennent du monde simulé (SimWorld::scanTof).
 // ------------------------------------------------------------------
-void LidarGS2::simSetScan(const uint16_t* dist, const LidarPoint* pts) {
-    uint16_t frontMin = 0xFFFF;
-    bool hasNearest = false;
-    float nearestX = 0, nearestY = 0, nearestD2 = 1e12f;
-
-    for (uint16_t i = 0; i < POINT_COUNT; ++i) {
-        _dist[i] = dist[i];
-        _points[i] = pts[i];
-        if (!pts[i].valid || !pts[i].confirmed) continue;
-        float d2 = pts[i].x * pts[i].x + pts[i].y * pts[i].y;
-        if (d2 < nearestD2) {
-            nearestD2 = d2;
-            nearestX = pts[i].x;
-            nearestY = pts[i].y;
-            hasNearest = true;
-        }
-        if (fabsf(pts[i].y) <= _cfg.corridorHalfWidthMm && pts[i].x < frontMin) {
-            frontMin = (uint16_t)pts[i].x;
-        }
-    }
-
-    _hasNearest = hasNearest;
-    _nearestX = nearestX;
-    _nearestY = nearestY;
-    _frontMin = frontMin;
-    updateObstacle(frontMin);
-    _lastFrameMs = millis();
-    _frames++;
+uint8_t TofArray::begin(const Config& cfg) {
+    configure(cfg);
+    return _cfg.count;
 }
 
-void LidarGS2::updateObstacle(uint16_t frontMin) {
-    // Objet qui se rapproche vite (face à face) : une seule trame suffit
-    bool fastApproach = _prevFrontMin != 0xFFFF && frontMin != 0xFFFF &&
-                        frontMin + _cfg.fastApproachMm < _prevFrontMin;
-    _prevFrontMin = frontMin;
-    if (frontMin < _cfg.obstacleMm) {
-        _clearCount = 0;
-        if (_nearCount < 255) _nearCount++;
-        if (_nearCount >= _cfg.onFrames || fastApproach) _obstacle = true;
-    } else if (frontMin >= _cfg.obstacleMm + _cfg.hysteresisMm) {
-        _nearCount = 0;
-        if (_clearCount < 255) _clearCount++;
-        if (_clearCount >= _cfg.offFrames) _obstacle = false;
-    }
-}
-
-bool LidarGS2::healthy() const {
-    return _frames > 0 && millis() - _lastFrameMs < 300;
-}
-
-bool LidarGS2::nearest(float& x, float& y) const {
-    x = _nearestX;
-    y = _nearestY;
-    return _hasNearest && healthy();
-}
-
-void LidarGS2::copyDistances(uint16_t* out) const { memcpy(out, _dist, sizeof(_dist)); }
-void LidarGS2::copyPoints(LidarPoint* out) const { memcpy(out, _points, sizeof(_points)); }
-
-LidarGS2::Stats LidarGS2::stats() const {
-    return {_frames, 0, _frames ? (uint32_t)(millis() - _lastFrameMs) : 0xFFFFFFFF};
-}
+void TofArray::update() {}  // le simulateur appelle setReading() puis process()

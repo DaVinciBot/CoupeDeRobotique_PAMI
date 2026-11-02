@@ -15,25 +15,22 @@
 #include <WiFi.h>
 #include <WiFiUdp.h>
 
-#include <functional>
+#include "PamiLink.h"
 
-class WifiLink {
+// Variante : Wi-Fi intégré de l'ESP32-S3 (2,4 GHz). Le choix retenu pour
+// les PAMI est la passerelle Wi-Fi 6E en UART (UartLink).
+class WifiLink : public PamiLink {
    public:
-    using Handler = std::function<void(const uint8_t* msg, size_t size)>;
-
     void begin(const char* ssid, const char* password, uint16_t localPort, uint16_t hostPort);
-    void update();  // à chaque tour de loop()
+    void update() override;  // à chaque tour de loop()
 
-    void onMessage(uint8_t id, Handler handler) { _handlers[id] = handler; }
-    bool send(const void* message, size_t size);
+    bool send(const void* message, size_t size) override;
 
-    bool connected() const { return WiFi.status() == WL_CONNECTED; }
-    bool hostKnown() const { return _hostKnown; }
+    bool connected() const override { return WiFi.status() == WL_CONNECTED; }
+    bool hostKnown() const override { return _hostKnown; }
     uint32_t lastRxMs() const { return _lastRxMs; }
 
    private:
-    void dispatch(const uint8_t* frame, size_t len);
-
     WiFiUDP _udp;
     const char* _ssid = nullptr;
     const char* _password = nullptr;
@@ -45,7 +42,6 @@ class WifiLink {
     bool _hostKnown = false;
     IPAddress _host;
     uint32_t _lastRxMs = 0;
-    Handler _handlers[256];
     uint8_t _rx[300];
     uint8_t _tx[300];
 };

@@ -20,7 +20,7 @@ void printHelp() {
         "  setpose <x> <y> <deg>\n"
         "  speed <mm/s>    accel <mm/s2>    base <mm> (entraxe)\n"
         "  servo <deg>     color\n"
-        "  lidar [pts]     etat du lidar (pts : tous les points x,y)\n"
+        "  tof             capteurs ToF : distances, points, couloir\n"
         "  zone <prof> <larg>  taille du couloir surveille (mm)\n"
         "  start [ms]      simuler le depart (ex: start 84000)\n"
         "  end             simuler la fin du match\n"
@@ -42,41 +42,36 @@ void runManual(App& a, Action* action) {
     a.state = MatchState::Manual;
 }
 
-// "lidar"     : état, zone surveillée, objet le plus proche
-// "lidar pts" : tous les points (indice, distance brute, x, y)
-void printLidar(App& a, bool allPoints) {
-    if (!a.lidarEnabled) {
-        Serial.println("lidar desactive (ENABLE_LIDAR)");
+// "tof" : chaque capteur (distance, point), couloir surveillé, objet le plus proche
+void printSensors(App& a) {
+    if (!a.sensorsEnabled) {
+        Serial.println("capteurs ToF desactives ou absents (ENABLE_TOF, cablage)");
         return;
     }
-    LidarGS2::Stats st = a.lidar.stats();
-    LidarGS2::Calibration cal = a.lidar.calibration();
-    Serial.printf("trames=%lu checksum_faux=%lu age=%lu ms calibration=%s\n",
-                  (unsigned long)st.frames, (unsigned long)st.badChecksum,
-                  (unsigned long)st.lastFrameAgeMs, cal.valid ? "ok" : "ABSENTE");
-    Serial.printf("couloir %u x %u mm : min=%u mm, obstacle=%d\n",
-                  a.lidar.obstacleThreshold(), 2 * a.lidar.corridorHalfWidth(),
-                  a.lidar.frontMinMm(), a.lidar.obstacle());
+    const TofArray::Config& cfg = a.tof.config();
+    ObstaclePoint p[ObstacleSensor::MAX_POINTS] = {};
+    a.tof.copyPoints(p);
+    for (uint8_t i = 0; i < cfg.count; ++i) {
+        const TofArray::Mount& m = cfg.sensors[i];
+        if (!a.tof.sensorAlive(i)) {
+            Serial.printf("ToF %u (%+4.0f deg) : ne repond pas\n", i, m.angleDeg);
+        } else if (!p[i].valid) {
+            Serial.printf("ToF %u (%+4.0f deg) : rien (%u mm)\n", i, m.angleDeg,
+                          a.tof.distanceMm(i));
+        } else {
+            Serial.printf("ToF %u (%+4.0f deg) : %4u mm -> (%4.0f, %4.0f)\n", i, m.angleDeg,
+                          a.tof.distanceMm(i), p[i].x, p[i].y);
+        }
+    }
+    Serial.printf("trames=%lu  couloir %u x %u mm : min=%u mm, obstacle=%d\n",
+                  (unsigned long)a.tof.frames(), a.tof.obstacleThreshold(),
+                  2 * a.tof.corridorHalfWidth(), a.tof.frontMinMm(), a.tof.obstacle());
     float nx, ny;
-    if (a.lidar.nearest(nx, ny)) {
+    if (a.tof.nearest(nx, ny)) {
         Serial.printf("plus proche : x=%.0f y=%.0f mm (%s)\n", nx, ny,
                       ny > 0 ? "gauche" : "droite");
     } else {
         Serial.println("plus proche : rien");
-    }
-    if (!allPoints) return;
-
-    uint16_t d[LidarGS2::POINT_COUNT];
-    LidarPoint p[LidarGS2::POINT_COUNT];
-    a.lidar.copyDistances(d);
-    a.lidar.copyPoints(p);
-    for (uint16_t i = 0; i < LidarGS2::POINT_COUNT; ++i) {
-        if (p[i].valid) {
-            Serial.printf("%3u: %3u mm -> (%4.0f, %4.0f)%s\n", i, d[i], p[i].x,
-                          p[i].y, p[i].confirmed ? "" : "  isole");
-        } else if (d[i] > 0) {
-            Serial.printf("%3u: %3u mm\n", i, d[i]);
-        }
     }
 }
 
@@ -90,20 +85,20 @@ void execute(App& a, char* line) {
     if (!strcmp(cmd, "help") || !strcmp(cmd, "?")) {
         printHelp();
     } else if (!strcmp(cmd, "f") && a1) {
-        if (canMoveManually(a)) runManual(a, new Forward(a.drive, a.lidarOrNull(), atof(a1)));
+        if (canMoveManually(a)) runManual(a, new Forward(a.drive, a.sensorsOrNull(), atof(a1)));
     } else if (!strcmp(cmd, "t") && a1) {
         if (canMoveManually(a)) runManual(a, new Turn(a.drive, atof(a1) * DEG_TO_RAD));
     } else if (!strcmp(cmd, "g") && a1 && a2) {
         if (canMoveManually(a)) {
             Pose target = {(float)atof(a1), (float)atof(a2), 0.0f};
-            runManual(a, new GoTo(a.drive, a.lidarOrNull(), target));
+            runManual(a, new GoTo(a.drive, a.sensorsOrNull(), target));
         }
     } else if (!strcmp(cmd, "sq")) {
         if (canMoveManually(a)) {
             float side = a1 ? atof(a1) : 300.0f;
             a.strategy.clear();
             for (int i = 0; i < 4; ++i) {
-                a.strategy.add(new Forward(a.drive, a.lidarOrNull(), side));
+                a.strategy.add(new Forward(a.drive, a.sensorsOrNull(), side));
                 a.strategy.add(new Turn(a.drive, (float)M_PI_2));
             }
             a.strategy.start();
@@ -132,13 +127,13 @@ void execute(App& a, char* line) {
     } else if (!strcmp(cmd, "servo") && a1) {
         a.servo.write((uint8_t)constrain(atoi(a1), 0, 180));
         Serial.println("ok");
-    } else if (!strcmp(cmd, "lidar")) {
-        printLidar(a, a1 && !strcmp(a1, "pts"));
+    } else if (!strcmp(cmd, "tof")) {
+        printSensors(a);
     } else if (!strcmp(cmd, "zone") && a1 && a2) {
-        a.lidar.setObstacleThreshold((uint16_t)atoi(a1));
-        a.lidar.setCorridorHalfWidth((uint16_t)(atoi(a2) / 2));
+        a.tof.setObstacleThreshold((uint16_t)atoi(a1));
+        a.tof.setCorridorHalfWidth((uint16_t)(atoi(a2) / 2));
         Serial.printf("couloir %u x %u mm (a reporter dans config.h)\n",
-                      a.lidar.obstacleThreshold(), 2 * a.lidar.corridorHalfWidth());
+                      a.tof.obstacleThreshold(), 2 * a.tof.corridorHalfWidth());
     } else if (!strcmp(cmd, "color")) {
         Serial.printf("couleur %s\n", teamName(readTeam()));
     } else if (!strcmp(cmd, "start")) {

@@ -3,6 +3,7 @@
 #include <string.h>
 
 #include "PamiMessages.h"
+#include "UartLink.h"
 #include "WifiLink.h"
 #include "app.h"
 #include "wifi_config.h"
@@ -11,7 +12,10 @@ using namespace pami_msg;
 
 namespace {
 
-WifiLink wifiLink;
+UartLink uartLink;
+WifiLink esp32Wifi;
+PamiLink* link_ = nullptr;  // lien utilisé (passerelle UART ou Wi-Fi intégré)
+HardwareSerial BridgeSerial(2);
 bool enabled = false;
 uint32_t lastHelloMs = 0;
 uint32_t lastStatusMs = 0;
@@ -31,12 +35,23 @@ bool forMe(const App& a, uint8_t pamiId) {
 }  // namespace
 
 void wifiBegin(App& a) {
-    if (!ENABLE_WIFI || strlen(WIFI_SSID) == 0) {
-        Serial.println("[WiFi] desactive (pas de include/wifi_secrets.h)");
+    if (!ENABLE_WIFI) {
+        Serial.println("[Com] desactivee (ENABLE_WIFI)");
         return;
     }
+    if (COM_TRANSPORT == ComTransport::UartBridge) {
+        uartLink.begin(BridgeSerial, BRIDGE_UART_BAUD, BRIDGE_UART_RX_PIN, BRIDGE_UART_TX_PIN);
+        link_ = &uartLink;
+    } else {
+        if (strlen(WIFI_SSID) == 0) {
+            Serial.println("[WiFi] desactive (pas de include/wifi_secrets.h)");
+            return;
+        }
+        esp32Wifi.begin(WIFI_SSID, WIFI_PASSWORD, PAMI_PORT, HOST_PORT);
+        link_ = &esp32Wifi;
+    }
     enabled = true;
-    wifiLink.begin(WIFI_SSID, WIFI_PASSWORD, PAMI_PORT, HOST_PORT);
+    PamiLink& wifiLink = *link_;
 
     wifiLink.onMessage(MATCH_START, [&a](const uint8_t* m, size_t n) {
         MsgMatchStart msg;
@@ -81,6 +96,7 @@ void wifiBegin(App& a) {
 
 void wifiUpdate(App& a) {
     if (!enabled) return;
+    PamiLink& wifiLink = *link_;
     wifiLink.update();
     if (!wifiLink.connected()) return;
 

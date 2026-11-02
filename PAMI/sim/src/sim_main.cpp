@@ -1,7 +1,7 @@
 // Simulateur de match PAMI : fait tourner le vrai code des 6 PAMI
 // (pami_app.cpp, strategies.cpp, lib/actions, lib/drive...) sur PC, en 6
 // contre 6 : l'adversaire fait tourner le même code, dans l'autre couleur.
-// Moteurs et lidar simulés ; le déroulé est écrit dans un fichier lu par
+// Moteurs et capteurs ToF simulés ; le déroulé est écrit dans un fichier lu par
 // sim/viewer.html.
 //
 // Lancement : python sim/run.py   (voir sim/README.md)
@@ -18,7 +18,7 @@ static void usage() {
         "Options :\n"
         "  --team bleu|jaune     equipe de nos PAMI (defaut : bleu)\n"
         "  --no-enemies          sans les 6 PAMI adverses\n"
-        "  --no-jetson           sans Jetson (pas de Wi-Fi : lidar seul)\n"
+        "  --no-jetson           sans Jetson (pas de Wi-Fi : capteurs seuls)\n"
         "  --speed MM_S          vitesse max des PAMI (defaut : config.h)\n"
         "  --out FICHIER         fichier de sortie (defaut : sim/out/sim_data.js)\n"
         "La taille du PAMI et la position de l'axe se reglent a la compilation\n"
@@ -46,7 +46,6 @@ int main(int argc, char** argv) {
     }
 
     SimWorld world(opt);
-    HardwareSerial lidarSerial(1);
 
     // Nos 6 PAMI, puis les 6 de l'adversaire : même code, autre couleur.
     // Chacun a son propre état, comme 6 + 6 cartes.
@@ -57,7 +56,7 @@ int main(int argc, char** argv) {
             App* a = new App();
             int logId = ours ? p.id : 100 + p.id;
             g_currentPami = logId;
-            appBegin(*a, p.id, lidarSerial);
+            appBegin(*a, p.id);
             if (opt.speedMmS > 0.0f) a->drive.setSpeed(opt.speedMmS);
             world.addPami(a, logId, ours, ours ? opt.team : enemyTeam);
         }

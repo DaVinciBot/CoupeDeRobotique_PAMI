@@ -2,16 +2,16 @@
 // Toutes commencent par attendre la phase d'attaque (85 s).
 //
 // Quand le module de communication sera choisi, une cible reçue en cours de
-// route pourra être donnée à GoTo via Options::provider (comme le lidar pour
+// route pourra être donnée à GoTo via Options::provider (comme les capteurs pour
 // l'attaque).
 #include "Actions.h"
 #include "app.h"
 
 namespace {
 
-// Point vu par le lidar -> position sur la table.
-Pose lidarToTable(const Pose& robot, float lx, float ly) {
-    float x = lx + LIDAR_OFFSET_X_MM;  // repère robot (axe des roues)
+// Point vu par les capteurs -> position sur la table.
+Pose sensorToTable(const Pose& robot, float lx, float ly) {
+    float x = lx + SENSOR_OFFSET_X_MM;  // repère robot (axe des roues)
     float c = cosf(robot.theta), s = sinf(robot.theta);
     return {robot.x + c * x - s * ly, robot.y + s * x + c * ly, 0.0f};
 }
@@ -21,8 +21,8 @@ Pose lidarToTable(const Pose& robot, float lx, float ly) {
 //     plus proche, à portée ; on sait alors qui est adversaire, on peut
 //     chasser tout de suite ;
 //  2) sinon, à partir de ATTACK_HUNT_FROM_MS : le point le plus proche vu par
-//     le lidar qui n'est ni un bord ni un obstacle connu (avant, ce serait
-//     souvent un de nos PAMI douve : le lidar ne distingue pas les équipes).
+//     les capteurs qui n'est ni un bord ni un obstacle connu (avant, ce serait
+//     souvent un de nos PAMI douve : les capteurs ne distingue pas les équipes).
 GoTo::TargetProvider nearestEnemyCandidate(App& a) {
     return [&a](const Pose& robot, Pose& out) {
         if (a.enemies.fresh(REMOTE_ENEMIES_MAX_AGE_MS)) {
@@ -42,16 +42,16 @@ GoTo::TargetProvider nearestEnemyCandidate(App& a) {
             return found;
         }
         if (a.clock.elapsedMs() < ATTACK_HUNT_FROM_MS) return false;
-        if (!a.lidarEnabled || !a.lidar.healthy()) return false;
+        if (!a.sensorsEnabled || !a.tof.healthy()) return false;
         constexpr float EDGE_MARGIN_MM = 40.0f;
 
-        LidarPoint pts[LidarGS2::POINT_COUNT];
-        a.lidar.copyPoints(pts);
+        ObstaclePoint pts[ObstacleSensor::MAX_POINTS] = {};  // au-delà des points : non valides
+        a.tof.copyPoints(pts);
         bool found = false;
         float bestD2 = INFINITY;
-        for (const LidarPoint& lp : pts) {
+        for (const ObstaclePoint& lp : pts) {
             if (!lp.valid || !lp.confirmed) continue;
-            Pose p = lidarToTable(robot, lp.x, lp.y);
+            Pose p = sensorToTable(robot, lp.x, lp.y);
             if (table::nearEdge(p.x, p.y, EDGE_MARGIN_MM) ||
                 table::isFixedObstacle(p.x, p.y, ATTACK_FIXED_OBSTACLE_MARGIN_MM)) {
                 continue;
@@ -88,10 +88,10 @@ bool isPoseFree(const Pose& axle) {
     return true;
 }
 
-// Point du lidar sur un obstacle connu (muraille, carrière, bord) ?
+// Point des capteurs sur un obstacle connu (muraille, carrière, bord) ?
 bool isKnownObstacle(const Pose& robot, float lx, float ly) {
-    constexpr float MARGIN_MM = 30.0f;  // erreurs de position et du lidar
-    Pose p = lidarToTable(robot, lx, ly);
+    constexpr float MARGIN_MM = 30.0f;  // erreurs de position et des capteurs
+    Pose p = sensorToTable(robot, lx, ly);
     return table::nearEdge(p.x, p.y, MARGIN_MM) || table::isFixedObstacle(p.x, p.y, MARGIN_MM);
 }
 
@@ -107,7 +107,7 @@ GoTo::Options travelOptions() {
     o.follow = true;
     o.bypass = true;
     o.halfWidthMm = PAMI_WIDTH_MM / 2;
-    o.lidarOffsetMm = LIDAR_OFFSET_X_MM;
+    o.sensorOffsetMm = SENSOR_OFFSET_X_MM;
     return o;
 }
 
@@ -116,7 +116,7 @@ GoTo::Options travelOptions() {
 void addExitAndRoute(App& a, Strategy& s) {
     const PamiProfile& p = *a.profile;
     if (p.exitMm > 0.0f) {
-        Forward* exit = new Forward(a.drive, a.lidarOrNull(), p.exitMm, p.exitMs);
+        Forward* exit = new Forward(a.drive, a.sensorsOrNull(), p.exitMm, p.exitMs);
         exit->finishOnKnownObstacle(isKnownObstacle);  // muraille : ne pas l'attendre
         s.add(exit);
     }
@@ -137,7 +137,7 @@ void addExitAndRoute(App& a, Strategy& s) {
         if (w.zone == Zone::PASSAGE) o.detourAfterMs = PASSAGE_DETOUR_AFTER_MS;
         o.passThroughMm = PASS_THROUGH_MM;  // ne pas s'arrêter au point de passage
         Pose point = {w.x, w.y, 0.0f};
-        s.add(new GoTo(a.drive, a.lidarOrNull(), table::forTeam(point, a.team), o));
+        s.add(new GoTo(a.drive, a.sensorsOrNull(), table::forTeam(point, a.team), o));
     }
 }
 
@@ -147,7 +147,7 @@ void addDouve(App& a, Strategy& s) {
     GoTo::Options o = travelOptions();
     o.ignoreObstacleWithinMm = DOUVE_IGNORE_OBSTACLE_WITHIN_MM;
     o.stopWithinMm = CENTER_AHEAD_OF_AXLE_MM;  // le centre du PAMI sur la douve
-    s.add(new GoTo(a.drive, a.lidarOrNull(),
+    s.add(new GoTo(a.drive, a.sensorsOrNull(),
                    table::forTeam(table::ENEMY_DOUVES[idx], a.team), o));
 }
 
@@ -162,9 +162,9 @@ void addAttack(App& a, Strategy& s) {
     GoTo::Options toZone = travelOptions();
     toZone.finalHeading = true;
     toZone.stopWithinMm = CENTER_AHEAD_OF_AXLE_MM;
-    s.add(new GoTo(a.drive, a.lidarOrNull(), zone, toZone));
+    s.add(new GoTo(a.drive, a.sensorsOrNull(), zone, toZone));
 
-    // 3) Attendre qu'un PAMI adverse passe à portée du lidar (~30 cm), puis
+    // 3) Attendre qu'un PAMI adverse passe à portée des capteurs (~30 cm), puis
     //    le suivre en corrigeant la direction en roulant, jusqu'à
     //    ATTACK_STOP_WITHIN_MM de lui.
     GoTo::Options hunt;
@@ -175,10 +175,10 @@ void addAttack(App& a, Strategy& s) {
     hunt.waitForTarget = true;
     hunt.retargetPeriodMs = 200;
     hunt.retargetMinMm = 20.0f;
-    s.add(new GoTo(a.drive, a.lidarOrNull(), zone, hunt));
+    s.add(new GoTo(a.drive, a.sensorsOrNull(), zone, hunt));
 
     // 4) Avancer pour toucher, puis déployer.
-    s.add(new Forward(a.drive, nullptr, ATTACK_CREEP_MM));  // sans lidar : on veut toucher
+    s.add(new Forward(a.drive, nullptr, ATTACK_CREEP_MM));  // sans capteur : on veut toucher
     s.add(new ServoMove(a.servo, ATTACK_SERVO_DEPLOY_DEG));  // tenu jusqu'à la fin
 }
 
@@ -199,7 +199,7 @@ void buildMatchStrategy(App& a) {
             break;
         case Role::Test:
             for (int i = 0; i < 4; ++i) {
-                s.add(new Forward(a.drive, a.lidarOrNull(), 300.0f));
+                s.add(new Forward(a.drive, a.sensorsOrNull(), 300.0f));
                 s.add(new Turn(a.drive, (float)M_PI_2));
             }
             break;
