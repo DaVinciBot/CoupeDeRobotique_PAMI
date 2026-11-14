@@ -35,11 +35,13 @@ bool forMe(const App& a, uint8_t pamiId) {
 }  // namespace
 
 void wifiBegin(App& a) {
-    if (!ENABLE_WIFI) {
-        Serial.println("[Com] desactivee (ENABLE_WIFI)");
+    ComTransport transport = comTransportFor(a.role);
+    if (transport == ComTransport::None) {
+        Serial.printf("[Com] aucune (role %s : pas de module Wi-Fi 6E), PAMI autonome\n",
+                      roleName(a.role));
         return;
     }
-    if (COM_TRANSPORT == ComTransport::UartBridge) {
+    if (transport == ComTransport::UartBridge) {
         uartLink.begin(BridgeSerial, BRIDGE_UART_BAUD, BRIDGE_UART_RX_PIN, BRIDGE_UART_TX_PIN);
         link_ = &uartLink;
     } else {
@@ -84,6 +86,8 @@ void wifiBegin(App& a) {
             remoteSetTeam(a, msg.team == 1 ? Team::Yellow : Team::Blue);
         }
     });
+    // Texte de la Jetson (calcul déporté) : positions des marqueurs ArUco
+    wifiLink.onText([&a](const char* text, size_t len) { remoteJetsonText(a, text, len); });
     wifiLink.onMessage(RESET_PAMI, [&a](const uint8_t* m, size_t n) {
         MsgResetPami msg;
         if (readMsg(m, n, msg) && forMe(a, msg.pami_id)) {

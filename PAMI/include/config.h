@@ -135,10 +135,9 @@ constexpr float CENTER_AHEAD_OF_AXLE_MM =
 // ============================================================
 constexpr int COLOR_OVERRIDE = 0;
 
-// Communication : choix du transport dans include/wifi_config.h
-// (COM_TRANSPORT : passerelle Wi-Fi en UART par défaut, ou Wi-Fi intégré de
-// l'ESP32 en 2,4 GHz), code dans lib/com. Facultatif : sans communication,
-// départ à la tirette.
+// Communication : include/wifi_config.h (seuls les PAMI d'attaque ont le
+// module Wi-Fi 6E, relié en UART), code dans lib/com. Facultatif : sans
+// communication, départ à la tirette.
 
 // ============================================================
 // Debug

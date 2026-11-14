@@ -24,9 +24,12 @@ constexpr uint8_t SIGNATURE[4] = {0xBA, 0xDD, 0x1C, 0xC5};
 constexpr uint8_t ALL_PAMI = 0;
 constexpr uint8_t MAX_ENEMIES = 6;
 
-// Ports UDP
+// Ports UDP. Les deux valent 5005 : c'est le port d'écoute de la Jetson
+// (WIFI_LISTEN_PORT du calcul déporté). Les PAMI ignorent les messages
+// 128..255 reçus (HELLO ou état d'un autre PAMI, en diffusion).
 constexpr uint16_t PAMI_PORT = 5005;  // les PAMI écoutent ici
-constexpr uint16_t HOST_PORT = 5006;  // l'hôte écoute ici (HELLO en diffusion, états)
+constexpr uint16_t HOST_PORT = 5005;  // l'hôte écoute ici (HELLO en diffusion, états)
+constexpr uint8_t FIRST_PAMI_MSG_ID = 128;
 
 enum : uint8_t {
     // hôte -> PAMI
@@ -35,6 +38,8 @@ enum : uint8_t {
     ENEMY_POSITIONS = 11,  // positions des PAMI adverses
     STOP_PAMI = 12,        // arrêt immédiat (fin de match à distance)
     SET_TEAM = 13,         // couleur de l'équipe (remplace la tirette couleur)
+    JETSON_TEXT = 20,      // texte de la Jetson ("5|id|x|y|yaw..."), par morceaux :
+                           // sur l'UART seulement (voir JetsonText.h)
     RESET_PAMI = 126,      // redémarrer l'ESP32
     NACK = 127,
 

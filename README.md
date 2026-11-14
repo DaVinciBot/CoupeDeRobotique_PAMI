@@ -53,11 +53,14 @@ La couleur vient de la tirette couleur (ou de `COLOR_OVERRIDE`).
 
 ## Communication (Wi-Fi 6E)
 
-Sur chaque PAMI, un **second contrôleur Wi-Fi 6E** (ex. AW-CU640, sur le PCB) est relié à l'ESP32-S3
-en **UART** et fait passerelle : il relaie les trames en **UDP** sans les modifier.
-Ce que doit faire son programme : [PAMI/lib/com/BRIDGE.md](PAMI/lib/com/BRIDGE.md).
-Variante possible : le Wi-Fi intégré de l'ESP32-S3 (2,4 GHz seulement), `COM_TRANSPORT` dans
-[wifi_config.h](PAMI/include/wifi_config.h).
+Seuls les **3 PAMI d'attaque** (4, 5, 6) communiquent. Chacun a un **module Wi-Fi 6E
+Ezurio Veda IF913** (puce Infineon CYW55913) relié à l'ESP32-S3 en **UART**, sur le
+connecteur LoRa de la carte. Le module fait passerelle : il relaie les trames en **UDP**
+sans les modifier. Son programme : [PAMI/bridge_veda_if913/](PAMI/bridge_veda_if913/README.md),
+spécification : [PAMI/lib/com/BRIDGE.md](PAMI/lib/com/BRIDGE.md).
+Les PAMI de douve (1, 2, 3) n'ont pas de module et jouent sans communication.
+Choix par rôle : `COM_TRANSPORT_ATTACK` / `COM_TRANSPORT_OTHERS` dans
+[wifi_config.h](PAMI/include/wifi_config.h) (variante d'essai : Wi-Fi intégré de l'ESP32, 2,4 GHz).
 
 Les messages ont le même format que `usb_com` / `com_pami` :
 `message | taille | CRC-8 | BA DD 1C C5`, ID 0..127 hôte → PAMI, 128..255 PAMI → hôte.
@@ -76,7 +79,9 @@ Les messages ont le même format que `usb_com` / `com_pami` :
 | `UPDATE_PAMI` | PAMI → hôte | état, temps de match et position, 10 fois par seconde |
 
 Chaque message vers un PAMI porte son numéro (0 = tous). Détail des champs :
-[PAMI/lib/com/PamiMessages.h](PAMI/lib/com/PamiMessages.h). Ports : les PAMI écoutent sur **5005**, l'hôte sur **5006**.
+[PAMI/lib/com/PamiMessages.h](PAMI/lib/com/PamiMessages.h). Port : **5005** pour tous (PAMI et hôte), comme la Jetson du calcul déporté.
+
+Les PAMI acceptent aussi le **texte de la Jetson** (`5|id|x_cm|y_cm|yaw_deg|...`) : les positions des marqueurs ArUco sont converties dans notre repère ([PAMI/lib/com/JetsonText.h](PAMI/lib/com/JetsonText.h)). Leur usage est **coupé par défaut** (`JETSON_USE_ENEMIES`, `JETSON_USE_RECALAGE` dans [wifi_config.h](PAMI/include/wifi_config.h)) tant que le repère et les numéros ArUco ne sont pas confirmés avec le calcul déporté.
 
 **Mise en route :**
 

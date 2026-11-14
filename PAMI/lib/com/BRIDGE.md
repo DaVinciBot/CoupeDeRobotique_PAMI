@@ -1,8 +1,9 @@
 # Passerelle Wi-Fi 6E des PAMI — ce que doit faire son programme
 
-Sur chaque PAMI, un second contrôleur (ex. **AW-CU640**, soudé sur le PCB) s'occupe
-uniquement du Wi-Fi 6E. Il est relié à l'ESP32-S3 par un **UART** et fait **passerelle** :
-il relaie les trames entre l'UART et le réseau, **sans les modifier ni les comprendre**.
+Sur chaque PAMI d'attaque, un second contrôleur (**Ezurio Veda IF913**, puce Infineon
+CYW55913) s'occupe uniquement du Wi-Fi 6E. Il est relié à l'ESP32-S3 par un **UART** et fait
+**passerelle** : il relaie les trames entre l'UART et le réseau, **sans les modifier ni les
+comprendre**. Son programme : [bridge_veda_if913/](../../bridge_veda_if913/README.md).
 
 ```
 Jetson / Pi  <-- Wi-Fi 6E, UDP -->  passerelle  <-- UART -->  ESP32-S3 (PAMI)
@@ -31,16 +32,23 @@ Sur l'UART circulent des trames, l'une après l'autre :
 1. **Se connecter au réseau Wi-Fi 6E** (nom et mot de passe dans son propre programme),
    se reconnecter seule en cas de perte. Écouter en UDP sur le **port 5005**.
 
-2. **Wi-Fi → UART** : chaque datagramme UDP reçu sur le port 5005 est **une trame**.
-   - Si sa signature, sa taille ou son CRC est faux : l'ignorer.
-   - Sinon : mémoriser l'adresse IP de l'expéditeur (c'est **l'hôte**) et recopier la
-     trame **telle quelle** sur l'UART.
+2. **Wi-Fi → UART** : chaque datagramme UDP reçu sur le port 5005 est :
+   - soit **une trame** valide (signature, taille, CRC). Si son ID est 128 ou plus,
+     elle vient d'un autre PAMI (`HELLO` ou état en diffusion) : l'ignorer. Sinon,
+     mémoriser l'adresse IP de l'expéditeur (c'est **l'hôte**) et recopier la trame
+     **telle quelle** sur l'UART ;
+   - soit **du texte de la Jetson** (commence par un chiffre, ex. `5|7|150|80|90`) :
+     mémoriser l'expéditeur comme hôte et recopier le texte sur l'UART en morceaux
+     `JETSON_TEXT` (ID 20), une trame par morceau :
+     `| 20 | numéro du morceau (0, 1...) | 1 si dernier, sinon 0 | texte (247 octets max) |`.
+     L'ESP32 les remet bout à bout (`JetsonText.h`) ;
+   - sinon : l'ignorer.
 
 3. **UART → Wi-Fi** : découper le flux UART en trames (accumuler les octets jusqu'à la
    signature `BA DD 1C C5`, vérifier taille et CRC — voir `FrameParser.cpp`).
    Chaque trame valide est envoyée **telle quelle** en un datagramme UDP vers :
-   - l'hôte mémorisé, port **5006** ;
-   - ou, tant qu'aucun hôte n'est connu, en **diffusion** (broadcast) sur le port 5006.
+   - l'hôte mémorisé, port **5005** (port d'écoute de la Jetson, `WIFI_LISTEN_PORT`) ;
+   - ou, tant qu'aucun hôte n'est connu, en **diffusion** (broadcast) sur le port 5005.
 
 4. **État, toutes les 500 ms**, sur l'UART uniquement (jamais en Wi-Fi) : une trame
    `BRIDGE_STATUS` (ID 200) :

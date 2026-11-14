@@ -191,3 +191,8 @@ PAMI/sim/out/
 
 # Identifiants Wi-Fi des PAMI (voir PAMI/include/wifi_secrets.example.h)
 PAMI/include/wifi_secrets.h
+
+# Passerelle Wi-Fi 6E (ModusToolbox) : identifiants et bibliothèques téléchargées
+PAMI/bridge_veda_if913/bridge_secrets.h
+PAMI/bridge_veda_if913/libs/
+PAMI/mtb_shared/

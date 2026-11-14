@@ -2,6 +2,7 @@
 // Sans dépendance au Wi-Fi : utilisé par wifi.cpp sur le robot, et par le
 // simulateur qui joue le rôle de la Jetson.
 #include "app.h"
+#include "JetsonText.h"
 
 // Départ du match (si le PAMI attend encore), ou resynchronisation de son
 // horloge sur celle de l'hôte (si le match est déjà lancé par la tirette).
@@ -37,4 +38,55 @@ void remoteSetTeam(App& a, Team team) {
     a.remoteTeamSet = true;
     a.remoteTeam = team;
     Serial.printf("[WiFi] couleur imposee : %s\n", teamName(team));
+}
+
+// --- Texte de la Jetson (calcul déporté) : seules les positions (cmd 5) servent.
+namespace {
+
+bool isEnemyAruco(int id, Team us) {
+    if (us == Team::Blue) return id >= ARUCO_YELLOW_MIN && id <= ARUCO_YELLOW_MAX;
+    return id >= ARUCO_BLUE_MIN && id <= ARUCO_BLUE_MAX;
+}
+
+void jetsonVision(App& a, const jetson_text::Marker* m, int count) {
+    static bool logged = false;
+    const jetson_text::FrameConfig frame = {JETSON_MIRROR_X, JETSON_MIRROR_Y, table::LENGTH_MM,
+                                            table::WIDTH_MM};
+    uint8_t pamiId = a.profile ? a.profile->id : 0;
+    int ownId = pamiId < sizeof(PAMI_ARUCO_ID) ? PAMI_ARUCO_ID[pamiId] : 0;
+
+    float xs[RemoteEnemies::MAX], ys[RemoteEnemies::MAX];
+    uint8_t n = 0;
+    for (int i = 0; i < count; ++i) {
+        float x, y, theta;
+        jetson_text::toTable(m[i], frame, x, y, theta);
+        if (!logged) {
+            Serial.printf("[Jetson] marqueur %d : (%d cm, %d cm, %d deg) -> (%.0f, %.0f) mm, %.2f rad\n",
+                          m[i].id, m[i].xCm, m[i].yCm, m[i].yawDeg, x, y, theta);
+        }
+        if (ownId > 0 && m[i].id == ownId) {
+            if (JETSON_USE_RECALAGE) remoteSetOdometry(a, {x, y, theta});
+        } else if (isEnemyAruco(m[i].id, a.team) && n < RemoteEnemies::MAX) {
+            xs[n] = x;
+            ys[n] = y;
+            ++n;
+        }
+    }
+    if (!logged) {
+        logged = true;
+        if (!JETSON_USE_ENEMIES && !JETSON_USE_RECALAGE) {
+            Serial.println("[Jetson] positions ignorees : repere a confirmer (wifi_config.h)");
+        }
+    }
+    if (JETSON_USE_ENEMIES) remoteEnemyPositions(a, xs, ys, n);
+}
+
+}  // namespace
+
+void remoteJetsonText(App& a, const char* text, size_t len) {
+    jetson_text::forEachLine(text, len, [&a](const char* line, size_t n) {
+        jetson_text::Marker m[jetson_text::MAX_MARKERS];
+        int count = jetson_text::parseVision(line, n, m, jetson_text::MAX_MARKERS);
+        if (count > 0) jetsonVision(a, m, count);
+    });
 }
