@@ -8,6 +8,16 @@ Team readTeam() {
     return digitalRead(COLOR_PIN_READ) == HIGH ? Team::Yellow : Team::Blue;
 }
 
+// Couleur forcée dans config.h : bien pour un test, piège si on l'oublie
+// avant un match (le PAMI joue alors en miroir). Rappelé au démarrage et au
+// lancement du match.
+static void warnColorOverride() {
+    if (COLOR_OVERRIDE == 0) return;
+    Serial.printf("!!! ATTENTION : couleur FORCEE en %s (COLOR_OVERRIDE = %d dans config.h)."
+                  " Remettre 0 avant un match !!!\n",
+                  COLOR_OVERRIDE == 1 ? "jaune" : "bleu", COLOR_OVERRIDE);
+}
+
 void applyRoleIdlePosition(App& a) {
     if (a.role == Role::Attack) a.servo.write(ATTACK_SERVO_REST_DEG);
 }
@@ -56,6 +66,7 @@ void appBegin(App& a, uint8_t pamiId) {
     Serial.printf("=== PAMI %u pret : role %s, micropas 1/%u, couleur lue %s ===\n",
                   a.profile->id, roleName(a.role), a.profile->microstepping,
                   teamName(readTeam()));
+    warnColorOverride();
 }
 
 void startMatch(App& a, uint32_t elapsedMs, const char* source) {
@@ -73,6 +84,7 @@ void startMatch(App& a, uint32_t elapsedMs, const char* source) {
     Serial.printf("=== MATCH LANCE (%s, t=%lu ms) : PAMI %u, role %s, %s ===\n",
                   source, (unsigned long)elapsedMs, a.profile->id, roleName(a.role),
                   teamName(a.team));
+    if (!a.remoteTeamSet) warnColorOverride();  // couleur Wi-Fi : le forçage ne compte pas
     buildMatchStrategy(a);
 }
 

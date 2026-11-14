@@ -13,6 +13,13 @@
 #include "config.h"
 #include "pami_profiles.h"
 #include "table_2027.h"
+#include "wifi_config.h"
+
+// Communication du PAMI : seuls les PAMI d'attaque ont le module Wi-Fi 6E.
+inline ComTransport comTransportFor(Role role) {
+    if (!ENABLE_WIFI) return ComTransport::None;
+    return role == Role::Attack ? COM_TRANSPORT_ATTACK : COM_TRANSPORT_OTHERS;
+}
 
 enum class MatchState : uint8_t {
     WaitStart = 0,  // en attente de la tirette
@@ -69,6 +76,7 @@ void remoteSetOdometry(App& a, const Pose& pose);
 void remoteEnemyPositions(App& a, const float* xs, const float* ys, uint8_t count);
 void remoteStop(App& a);
 void remoteSetTeam(App& a, Team team);
+void remoteJetsonText(App& a, const char* text, size_t len);  // texte de la Jetson
 
 // wifi.cpp (robot seulement)
 void wifiBegin(App& a);

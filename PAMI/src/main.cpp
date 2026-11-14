@@ -13,14 +13,26 @@ void setup() {
     Serial.println();
     appBegin(app, PAMI_ID);
     wifiBegin(app);  // facultatif : sans Wi-Fi, le PAMI marche seul
-    Serial.println("Attente tirette. Tapez \"help\" pour la console.");
+    if (app.tirette.armed()) {
+        Serial.println("[Tirette] branchee : PAMI arme, la retirer pour partir.");
+    } else {
+        Serial.println("[Tirette] non detectee : la brancher pour armer le PAMI.");
+    }
+    Serial.println("Tapez \"help\" pour la console.");
 }
 
 void loop() {
     app.drive.update();
     if (app.sensorsEnabled) app.tof.update();  // capteurs ToF (non bloquant)
 
-    if (app.tirette.update() && app.state == MatchState::WaitStart) {
+    // Tirette : on signale l'armement. Si ce message n'apparaît pas quand on
+    // la branche, c'est le câblage (fil coupé, faux contact).
+    bool wasArmed = app.tirette.armed();
+    bool pulled = app.tirette.update();
+    if (!wasArmed && app.tirette.armed()) {
+        Serial.println("[Tirette] branchee : PAMI arme, la retirer pour partir.");
+    }
+    if (pulled && app.state == MatchState::WaitStart) {
         startMatch(app, 0, "tirette");
     }
 

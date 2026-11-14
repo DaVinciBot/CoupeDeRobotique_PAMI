@@ -217,6 +217,8 @@ void SimWorld::jetson(uint32_t tMs) {
 
     for (SimPami& p : _pamis) {
         if (!p.started) continue;
+        // Seuls les PAMI d'attaque ont le module Wi-Fi 6E (wifi_config.h)
+        if (comTransportFor(p.app->role) == ComTransport::None) continue;
         g_currentPami = p.logId;
         if (enemies) {  // centres des PAMI de l'autre équipe
             float xs[RemoteEnemies::MAX], ys[RemoteEnemies::MAX];
@@ -533,7 +535,9 @@ void SimWorld::printSummary() const {
         if (e.kind == "alerte") alerts++;
     }
     printf("\nJetson simulee (Wi-Fi) : %s\n",
-           _opt.jetson ? "oui (positions adverses 10 Hz, recalage 1 Hz)" : "non");
+           _opt.jetson ? "oui, PAMI d'attaque seulement (positions adverses 10 Hz, "
+                         "recalage 1 Hz)"
+                       : "non");
     printf("Collisions : %d, contacts entre equipes : %d, alertes : %d\n", collisions,
            contacts, alerts);
     for (const SimEvent& e : g_events) {

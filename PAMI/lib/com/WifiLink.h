@@ -5,7 +5,7 @@
 // - Rien ne bloque : connexion et reconnexion se font en tâche de fond,
 //   update() lit les datagrammes reçus et appelle les fonctions enregistrées.
 // - L'hôte est appris automatiquement : c'est l'expéditeur du dernier
-//   message valide. Tant qu'il n'est pas connu, send() diffuse sur le réseau.
+//   message valide (trame binaire ou texte de la Jetson). Tant qu'il n'est pas connu, send() diffuse sur le réseau.
 //
 // Le PAMI doit marcher sans Wi-Fi (tirette, stratégie embarquée) : le lien
 // n'apporte que des informations en plus.
@@ -42,6 +42,6 @@ class WifiLink : public PamiLink {
     bool _hostKnown = false;
     IPAddress _host;
     uint32_t _lastRxMs = 0;
-    uint8_t _rx[300];
+    uint8_t _rx[1500];  // texte de la Jetson : jusqu'à ~700 octets
     uint8_t _tx[300];
 };

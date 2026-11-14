@@ -1,6 +1,7 @@
 #include "WifiLink.h"
 
 #include "PamiFrame.h"
+#include "PamiMessages.h"
 
 static constexpr uint32_t RECONNECT_PERIOD_MS = 2000;
 
@@ -47,11 +48,17 @@ void WifiLink::update() {
         int n = _udp.read(_rx, sizeof(_rx));
         if (n <= 0 || len > (int)sizeof(_rx)) continue;  // trop long : ignoré
         size_t size = pami_frame::decode(_rx, (size_t)n);
-        if (size == 0) continue;  // trame invalide
+        bool text = size == 0 && _rx[0] >= '0' && _rx[0] <= '9';  // texte de la Jetson
+        if (size == 0 && !text) continue;                            // trame invalide
+        if (size > 0 && _rx[0] >= pami_msg::FIRST_PAMI_MSG_ID) continue;  // autre PAMI
         _host = from;
         _hostKnown = true;
         _lastRxMs = millis();
-        dispatch(_rx, size);
+        if (text) {
+            dispatchText((const char*)_rx, (size_t)n);
+        } else {
+            dispatch(_rx, size);
+        }
     }
 }
 

@@ -4,8 +4,10 @@ Même format que lib/com/PamiMessages.h et PamiFrame.h (à garder aligné) :
     trame = message | taille | CRC-8 (poly 0x07) | BA DD 1C C5
     message = ID (1 octet) + champs (struct.pack, little-endian, float32)
 
-Les PAMI écoutent sur le port 5005 ; l'hôte écoute sur le port 5006
-(HELLO diffusés par les PAMI, puis leur état à 10 Hz).
+Les PAMI et l'hôte écoutent tous sur le port 5005, comme la Jetson du calcul
+déporté (WIFI_LISTEN_PORT) : HELLO diffusés par les PAMI, puis leur état à 10 Hz.
+Les PAMI acceptent aussi le texte de la Jetson ("5|id|x_cm|y_cm|yaw_deg|...",
+voir lib/com/JetsonText.h) : commande « texte » ci-dessous.
 
 Utilisation en ligne de commande (sur le réseau des PAMI) :
     python tools/pami_wifi.py listen                 # affiche HELLO et états
@@ -15,6 +17,7 @@ Utilisation en ligne de commande (sur le réseau des PAMI) :
     python tools/pami_wifi.py team jaune
     python tools/pami_wifi.py odom 3 2700 250 3.14   # recalage du PAMI 3
     python tools/pami_wifi.py enemies 1500 800 1200 1300   # positions adverses
+    python tools/pami_wifi.py texte "5|7|150|80|90"  # trame texte, comme la Jetson
     python tools/pami_wifi.py selftest               # vérifie l'encodage
 
 Depuis un programme Python (Jetson) :
@@ -34,7 +37,7 @@ from enum import IntEnum
 
 SIGNATURE = bytes([0xBA, 0xDD, 0x1C, 0xC5])
 PAMI_PORT = 5005
-HOST_PORT = 5006
+HOST_PORT = 5005  # = PAMI_PORT : port d'écoute de la Jetson
 ALL_PAMI = 0
 MAX_ENEMIES = 6
 
@@ -170,6 +173,8 @@ class PamiLink:
             if message is None:
                 continue
             msg, fields = unpack(message)
+            if msg < 128:
+                continue  # message vers les PAMI (un autre hôte, ou notre diffusion)
             if fields:
                 self.pamis[fields[0]] = ip
                 out.append((fields[0], msg, fields[1:]))
@@ -217,6 +222,8 @@ def main():
     p.add_argument("theta", type=float)
     p = sub.add_parser("enemies")
     p.add_argument("coords", type=float, nargs="*", help="x1 y1 x2 y2 ...")
+    p = sub.add_parser("texte")
+    p.add_argument("ligne", help='trame texte de la Jetson, ex. "5|7|150|80|90"')
     p = sub.add_parser("reset")
     p.add_argument("id", type=int)
     sub.add_parser("selftest")
@@ -227,6 +234,11 @@ def main():
         return
 
     link = PamiLink()
+    if args.cmd == "texte":
+        data = (args.ligne + "\n").encode()
+        link.sock.sendto(data, (args.ip or "255.255.255.255", PAMI_PORT))
+        print("envoye :", args.ligne)
+        return
     if args.cmd == "listen":
         print(f"Ecoute sur le port {HOST_PORT} (Ctrl+C pour arreter)")
         try:
