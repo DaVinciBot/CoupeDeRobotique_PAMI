@@ -16,10 +16,56 @@ Pose sensorToTable(const Pose& robot, float lx, float ly) {
     return {robot.x + c * x - s * ly, robot.y + s * x + c * ly, 0.0f};
 }
 
+bool inTeammateAttackZone(const App& a, float x, float y);
+
+float distToSegment(float px, float py, float ax, float ay, float bx, float by) {
+    float dx = bx - ax, dy = by - ay;
+    float len2 = dx * dx + dy * dy;
+    float t = len2 > 0.0f ? ((px - ax) * dx + (py - ay) * dy) / len2 : 0.0f;
+    t = t < 0.0f ? 0.0f : (t > 1.0f ? 1.0f : t);
+    return hypotf(px - (ax + t * dx), py - (ay + t * dy));
+}
+
+// Sans Jetson : point sur le trajet d'un de nos PAMI douve (sortie d'écurie,
+// points de passage, puis sa douve) ? Bloqué en route, il serait pris pour
+// cible par nos PAMI d'attaque.
+bool onTeammateDouveRoute(const App& a, float x, float y) {
+    for (const PamiProfile& p : PAMI_PROFILES) {
+        if (p.role != Role::Douve) continue;
+        Pose s = table::forTeam(p.startBlue, a.team);
+        Pose from = {s.x + p.exitMm * cosf(s.theta), s.y + p.exitMm * sinf(s.theta), 0.0f};
+        for (uint8_t i = 0; i <= p.routeLength; ++i) {
+            Pose to = i < p.routeLength
+                          ? table::forTeam({p.route[i].x, p.route[i].y, 0.0f}, a.team)
+                          : table::forTeam(table::ENEMY_DOUVES[p.targetIndex % table::ENEMY_DOUVE_COUNT],
+                                           a.team);
+            if (distToSegment(x, y, from.x, from.y, to.x, to.y) <= OWN_ROUTE_CLEARANCE_MM) {
+                return true;
+            }
+            from = to;
+        }
+    }
+    return false;
+}
+
+// Avec les positions de nos robots (Jetson) : cet adversaire est-il déjà au
+// contact d'un coéquipier, ou un coéquipier est-il sur le chemin ? Le viser
+// ferait percuter le coéquipier.
+bool allyInTheWay(const App& a, const Pose& robot, float ex, float ey) {
+    if (!a.allies.fresh(REMOTE_ENEMIES_MAX_AGE_MS)) return false;
+    for (uint8_t i = 0; i < a.allies.count; ++i) {
+        float ax = a.allies.x[i], ay = a.allies.y[i];
+        if (hypotf(ax - ex, ay - ey) <= ENGAGED_RADIUS_MM) return true;
+        if (distToSegment(ax, ay, robot.x, robot.y, ex, ey) <= ALLY_PATH_CLEARANCE_MM) return true;
+    }
+    return false;
+}
+
 // Cible de l'attaque :
 //  1) si la Jetson envoie les positions adverses (Wi-Fi) : le PAMI adverse le
-//     plus proche, à portée ; on sait alors qui est adversaire, on peut
-//     chasser tout de suite ;
+//     plus proche, à portée, qui n'est ni au contact d'un coéquipier ni
+//     derrière lui ; on sait alors qui est adversaire, on peut chasser tout
+//     de suite ;
 //  2) sinon, à partir de ATTACK_HUNT_FROM_MS : le point le plus proche vu par
 //     les capteurs qui n'est ni un bord ni un obstacle connu (avant, ce serait
 //     souvent un de nos PAMI douve : les capteurs ne distingue pas les équipes).
@@ -31,7 +77,8 @@ GoTo::TargetProvider nearestEnemyCandidate(App& a) {
             for (uint8_t i = 0; i < a.enemies.count; ++i) {
                 float dx = a.enemies.x[i] - robot.x, dy = a.enemies.y[i] - robot.y;
                 float d = hypotf(dx, dy);
-                if (d < best && d > 1.0f) {
+                if (d < best && d > 1.0f &&
+                    !allyInTheWay(a, robot, a.enemies.x[i], a.enemies.y[i])) {
                     best = d;
                     // viser sa face, pas son centre (stopWithin compte depuis la surface)
                     float back = (PAMI_LENGTH_MM / 2) / d;
@@ -52,8 +99,14 @@ GoTo::TargetProvider nearestEnemyCandidate(App& a) {
         for (const ObstaclePoint& lp : pts) {
             if (!lp.valid || !lp.confirmed) continue;
             Pose p = sensorToTable(robot, lp.x, lp.y);
+            // x dans le repère bleu : nos douves (que visent les adversaires)
+            // sont du côté des x grands
+            const float xBlue = a.team == Team::Yellow ? table::LENGTH_MM - p.x : p.x;
             if (table::nearEdge(p.x, p.y, EDGE_MARGIN_MM) ||
-                table::isFixedObstacle(p.x, p.y, ATTACK_FIXED_OBSTACLE_MARGIN_MM)) {
+                table::isFixedObstacle(p.x, p.y, ATTACK_FIXED_OBSTACLE_MARGIN_MM) ||
+                inTeammateAttackZone(a, p.x, p.y) ||  // un de nos PAMI d'attaque
+                xBlue < ATTACK_SENSOR_HUNT_MIN_X_MM ||  // côté adverse : nos PAMI douve
+                onTeammateDouveRoute(a, p.x, p.y)) {  // un de nos PAMI douve, bloqué en route
                 continue;
             }
             float d2 = lp.x * lp.x + lp.y * lp.y;
@@ -67,9 +120,23 @@ GoTo::TargetProvider nearestEnemyCandidate(App& a) {
     };
 }
 
+// Point dans la zone d'attaque d'un coéquipier ? Un PAMI d'attaque y
+// stationne et y pivote : les autres n'y font ni esquive, ni contournement,
+// ni courbe, et ne le prennent pas pour cible.
+bool inTeammateAttackZone(const App& a, float x, float y) {
+    const int own = a.role == Role::Attack ? a.profile->targetIndex % table::ATTACK_ZONE_COUNT : -1;
+    for (uint8_t i = 0; i < table::ATTACK_ZONE_COUNT; ++i) {
+        if (i == own) continue;
+        Pose z = table::forTeam(table::ATTACK_ZONES[i], a.team);
+        if (hypotf(x - z.x, y - z.y) <= TEAMMATE_ZONE_RADIUS_MM) return true;
+    }
+    return false;
+}
+
 // Le PAMI tient-il à cette pose sans toucher muraille, carrière ou bord ?
 // On teste son contour (coins, milieux des côtés) et son centre.
-bool isPoseFree(const Pose& axle) {
+// Avec `a` : ni dans la zone d'attaque d'un coéquipier.
+bool isPoseFree(const Pose& axle, const App* a = nullptr) {
     constexpr float MARGIN_MM = 10.0f;
     const float c = cosf(axle.theta), s = sinf(axle.theta);
     const float front = PAMI_LENGTH_MM / 2 - PAMI_AXLE_FROM_CENTER_MM;
@@ -80,7 +147,8 @@ bool isPoseFree(const Pose& axle) {
     for (float u : along) {
         for (float v : across) {
             float x = axle.x + c * u - s * v, y = axle.y + s * u + c * v;
-            if (table::nearEdge(x, y, MARGIN_MM) || table::isFixedObstacle(x, y, MARGIN_MM)) {
+            if (table::nearEdge(x, y, MARGIN_MM) || table::isFixedObstacle(x, y, MARGIN_MM) ||
+                (a != nullptr && inTeammateAttackZone(*a, x, y))) {
                 return false;
             }
         }
@@ -95,14 +163,38 @@ bool isKnownObstacle(const Pose& robot, float lx, float ly) {
     return table::nearEdge(p.x, p.y, MARGIN_MM) || table::isFixedObstacle(p.x, p.y, MARGIN_MM);
 }
 
+// Attaque : point des capteurs qu'on a le droit de toucher ? Avec les positions
+// adverses de la Jetson, seulement s'il est près d'un PAMI adverse (ou sur un
+// obstacle connu, qui ne compte pas) : un autre point est sans doute un de nos
+// PAMI douve, devant lequel on s'arrête au lieu de le pousser. Sans positions
+// adverses, on ne sait pas qui est qui : tout point compte comme cible.
+KnownObstacleFilter isEnemyOrKnown(App& a) {
+    return [&a](const Pose& robot, float lx, float ly) {
+        if (!a.enemies.fresh(REMOTE_ENEMIES_MAX_AGE_MS)) return true;
+        if (isKnownObstacle(robot, lx, ly)) return true;
+        Pose p = sensorToTable(robot, lx, ly);
+        float enemyD = INFINITY, allyD = INFINITY;
+        for (uint8_t i = 0; i < a.enemies.count; ++i) {
+            enemyD = fminf(enemyD, hypotf(p.x - a.enemies.x[i], p.y - a.enemies.y[i]));
+        }
+        if (a.allies.fresh(REMOTE_ENEMIES_MAX_AGE_MS)) {
+            for (uint8_t i = 0; i < a.allies.count; ++i) {
+                allyD = fminf(allyD, hypotf(p.x - a.allies.x[i], p.y - a.allies.y[i]));
+            }
+        }
+        // Plus près d'un coéquipier que d'un adversaire : c'est le coéquipier
+        return enemyD <= ENEMY_MATCH_RADIUS_MM && enemyD < allyD;
+    };
+}
+
 // Options de déplacement : évitement + contournement si bloqué.
-GoTo::Options travelOptions() {
+GoTo::Options travelOptions(const App& a) {
     GoTo::Options o;
     o.timeoutMs = GOTO_TIMEOUT_MS;
     o.detourAfterMs = DETOUR_AFTER_MS;
     o.dodgeOncoming = true;
     o.smooth = true;
-    o.isPoseFree = isPoseFree;
+    o.isPoseFree = [&a](const Pose& p) { return isPoseFree(p, &a); };
     o.isKnownObstacle = isKnownObstacle;
     o.follow = true;
     o.bypass = true;
@@ -122,7 +214,7 @@ void addExitAndRoute(App& a, Strategy& s) {
     }
     for (uint8_t i = 0; i < p.routeLength; ++i) {
         const Waypoint& w = p.route[i];
-        GoTo::Options o = travelOptions();
+        GoTo::Options o = travelOptions(a);
         if (w.zone == Zone::HOME) {  // faire la queue derrière les coéquipiers
             o.detourAfterMs = 0;
             o.dodgeOncoming = false;
@@ -144,7 +236,7 @@ void addExitAndRoute(App& a, Strategy& s) {
 void addDouve(App& a, Strategy& s) {
     uint8_t idx = a.profile->targetIndex % table::ENEMY_DOUVE_COUNT;
     addExitAndRoute(a, s);
-    GoTo::Options o = travelOptions();
+    GoTo::Options o = travelOptions(a);
     o.ignoreObstacleWithinMm = DOUVE_IGNORE_OBSTACLE_WITHIN_MM;
     o.stopWithinMm = CENTER_AHEAD_OF_AXLE_MM;  // le centre du PAMI sur la douve
     s.add(new GoTo(a.drive, a.sensorsOrNull(),
@@ -159,7 +251,7 @@ void addAttack(App& a, Strategy& s) {
     //    On ne chasse pas en route : on prendrait pour cible le coéquipier
     //    sorti juste avant de la même écurie.
     addExitAndRoute(a, s);
-    GoTo::Options toZone = travelOptions();
+    GoTo::Options toZone = travelOptions(a);
     toZone.finalHeading = true;
     toZone.stopWithinMm = CENTER_AHEAD_OF_AXLE_MM;
     s.add(new GoTo(a.drive, a.sensorsOrNull(), zone, toZone));
@@ -167,18 +259,24 @@ void addAttack(App& a, Strategy& s) {
     // 3) Attendre qu'un PAMI adverse passe à portée des capteurs (~30 cm), puis
     //    le suivre en corrigeant la direction en roulant, jusqu'à
     //    ATTACK_STOP_WITHIN_MM de lui.
+    //    L'obstacle, c'est la cible : on ne s'arrête que devant ce qui n'est
+    //    pas un adversaire (un coéquipier, si la Jetson donne les positions).
     GoTo::Options hunt;
     hunt.timeoutMs = 0;  // jusqu'à la fin du match
-    hunt.pauseOnObstacle = false;  // l'obstacle, c'est la cible
+    hunt.isKnownObstacle = isEnemyOrKnown(a);
     hunt.stopWithinMm = ATTACK_STOP_WITHIN_MM;
+    hunt.faceTarget = true;
     hunt.provider = nearestEnemyCandidate(a);
     hunt.waitForTarget = true;
     hunt.retargetPeriodMs = 200;
     hunt.retargetMinMm = 20.0f;
     s.add(new GoTo(a.drive, a.sensorsOrNull(), zone, hunt));
 
-    // 4) Avancer pour toucher, puis déployer.
-    s.add(new Forward(a.drive, nullptr, ATTACK_CREEP_MM));  // sans capteur : on veut toucher
+    // 4) Avancer pour toucher (sans s'arrêter devant l'adversaire, mais devant
+    //    un coéquipier), puis déployer.
+    Forward* creep = new Forward(a.drive, a.sensorsOrNull(), ATTACK_CREEP_MM, ATTACK_CREEP_MAX_MS);
+    creep->ignoreObstacles(isEnemyOrKnown(a));
+    s.add(creep);
     s.add(new ServoMove(a.servo, ATTACK_SERVO_DEPLOY_DEG));  // tenu jusqu'à la fin
 }
 

@@ -220,17 +220,25 @@ void SimWorld::jetson(uint32_t tMs) {
         // Seuls les PAMI d'attaque ont le module Wi-Fi 6E (wifi_config.h)
         if (comTransportFor(p.app->role) == ComTransport::None) continue;
         g_currentPami = p.logId;
-        if (enemies) {  // centres des PAMI de l'autre équipe
+        if (enemies) {  // centres des PAMI de l'autre équipe, et des coéquipiers
             float xs[RemoteEnemies::MAX], ys[RemoteEnemies::MAX];
-            uint8_t n = 0;
+            float ax[RemoteEnemies::MAX], ay[RemoteEnemies::MAX];
+            uint8_t n = 0, nAllies = 0;
             for (const SimPami& o : _pamis) {
-                if (o.ours == p.ours || n >= RemoteEnemies::MAX) continue;
+                if (&o == &p) continue;
                 Box b = pamiBox(o);
-                xs[n] = (float)b.cx;
-                ys[n] = (float)b.cy;
-                ++n;
+                if (o.ours != p.ours && n < RemoteEnemies::MAX) {
+                    xs[n] = (float)b.cx;
+                    ys[n] = (float)b.cy;
+                    ++n;
+                } else if (o.ours == p.ours && _opt.jetsonAllies && nAllies < RemoteEnemies::MAX) {
+                    ax[nAllies] = (float)b.cx;
+                    ay[nAllies] = (float)b.cy;
+                    ++nAllies;
+                }
             }
             remoteEnemyPositions(*p.app, xs, ys, n);
+            if (_opt.jetsonAllies) remoteAllyPositions(*p.app, ax, ay, nAllies);
         }
         if (odometry) {  // recalage sur la vraie position
             remoteSetOdometry(*p.app, p.truePose);

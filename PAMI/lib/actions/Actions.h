@@ -79,6 +79,12 @@ class Forward : public Action {
         _minMs = ms;
         return *this;
     }
+    // Ne s'arrêter que pour les points des capteurs que ce filtre ne reconnaît
+    // pas (attaque : on veut toucher l'adversaire, pas un coéquipier).
+    Forward& ignoreObstacles(KnownObstacleFilter isIgnored) {
+        _isIgnored = isIgnored;
+        return *this;
+    }
     void start() override;
     void update() override;
     void stop() override;
@@ -91,6 +97,7 @@ class Forward : public Action {
     float _mm;
     uint32_t _maxMs;
     KnownObstacleFilter _isKnown = nullptr;
+    KnownObstacleFilter _isIgnored = nullptr;
     uint32_t _minMs = 0;
     uint32_t _startMs = 0;
     bool _timeUp = false;
@@ -129,6 +136,9 @@ class GoTo : public Action {
     struct Options {
         bool pauseOnObstacle = true;  // évitement : attendre que ça se libère
         bool finalHeading = false;    // s'orienter selon target.theta à la fin
+        // À la fin, se tourner vers la cible (attaque : même si elle est déjà
+        // à moins de stopWithinMm au départ, l'avant doit être face à elle).
+        bool faceTarget = false;
         // Ignorer les capteurs à moins de X mm de la cible (rempart, pierres
         // autour d'une douve) pour ne pas rester bloqué juste avant.
         float ignoreObstacleWithinMm = 0.0f;
@@ -249,6 +259,7 @@ class GoTo : public Action {
     bool steerToTarget() { return steerToTarget(_opt.maxSteerRad, false); }
     bool obstacleAhead() const;
     void startDetour();
+    float safeBackMm(float want) const;
     bool startBypass();
     bool lineIsFree(const Pose& from, const Pose& to) const;
     void chooseDetourSide();
@@ -286,6 +297,8 @@ class GoTo : public Action {
 
     // Contournement direct : cible provisoire à côté de l'obstacle
     bool _bypassing = false;
+    uint8_t _bypassTries = 0;  // contournements de suite sans atteindre le point de passage
+    static constexpr uint8_t MAX_BYPASS_TRIES = 3;
     Pose _savedTarget;
     float _savedStopWithinMm = 0.0f;
 };

@@ -49,9 +49,8 @@
 #define BRIDGE_HOST_PORT            (5005u)   /* la Jetson écoute ici (WIFI_LISTEN_PORT) */
 #define BRIDGE_UDP_MAX              (1472u)   /* plus grand datagramme reçu */
 
-/* Trames texte de la Jetson ("cmd|arg|arg
-", calcul déporté) : recopiées sur
- * l'UART par morceaux, dans le message JETSON_TEXT :
+/* Trames texte de la Jetson ("cmd|arg|arg\n", calcul déporté) : recopiées
+ * sur l'UART par morceaux, dans le message JETSON_TEXT :
  *   | 20 | numéro du morceau (0, 1...) | 1 si dernier | texte (247 octets max) | */
 #define BRIDGE_JETSON_TEXT_ID       (20u)
 #define BRIDGE_TEXT_CHUNK           (FRAME_MAX_MESSAGE - 3u)

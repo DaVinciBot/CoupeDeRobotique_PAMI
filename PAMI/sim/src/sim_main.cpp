@@ -19,6 +19,7 @@ static void usage() {
         "  --team bleu|jaune     equipe de nos PAMI (defaut : bleu)\n"
         "  --no-enemies          sans les 6 PAMI adverses\n"
         "  --no-jetson           sans Jetson (pas de Wi-Fi : capteurs seuls)\n"
+        "  --no-allies           la Jetson n'envoie que les adversaires (pas nos PAMI)\n"
         "  --speed MM_S          vitesse max des PAMI (defaut : config.h)\n"
         "  --out FICHIER         fichier de sortie (defaut : sim/out/sim_data.js)\n"
         "La taille du PAMI et la position de l'axe se reglent a la compilation\n"
@@ -35,6 +36,8 @@ int main(int argc, char** argv) {
             opt.enemies = false;
         } else if (!strcmp(argv[i], "--no-jetson")) {
             opt.jetson = false;
+        } else if (!strcmp(argv[i], "--no-allies")) {
+            opt.jetsonAllies = false;
         } else if (!strcmp(argv[i], "--speed") && i + 1 < argc) {
             opt.speedMmS = (float)atof(argv[++i]);
         } else if (!strcmp(argv[i], "--out") && i + 1 < argc) {

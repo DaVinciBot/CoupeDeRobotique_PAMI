@@ -51,16 +51,20 @@ constexpr uint8_t countOf(const Waypoint (&)[N]) {
 // écurie côte à côte, tournés vers l'adversaire, centres espacés de 100 mm.
 //
 // Sortie : les 3 PAMI d'une écurie partent en même temps, tout droit. Chacun
-// roule un peu plus longtemps que son voisin côté intérieur (2,5 s, 3 s,
-// 3,5 s) : quand il tourne, son voisin a déjà tourné et s'éloigne, et son
-// avant ne balaie pas la place d'un PAMI qu'il ne voit pas (hors du champ
-// des capteurs). Ensuite, chacun va directement à sa cible : sans les carrières,
+// roule 150 mm de plus que son voisin côté intérieur (750, 900, 1050 mm) :
+// quand il tourne, son voisin a déjà tourné et s'éloigne, et son avant ne
+// balaie pas la place d'un PAMI qu'il ne voit pas (hors du champ des
+// capteurs). Ensuite, chacun va directement à sa cible : sans les carrières,
 // rien ne gêne entre l'écurie et le château adverse.
+// La sortie se règle en distance, pas en temps : avec une durée fixe, à
+// 200 mm/s les PAMI tournaient trop tôt (tour de notre château renversée,
+// PAMI d'attaque dans le PAMI pont, vu en simulation). La durée n'est plus
+// qu'une sécurité (obstacle devant : on finit par passer à la suite).
 // ------------------------------------------------------------------
-constexpr float EXIT_MAX_MM = 1200.0f;
-constexpr uint16_t INNER_SLOT_EXIT_MS = 2500;   // y 250 / 1750
-constexpr uint16_t MIDDLE_SLOT_EXIT_MS = 3000;  // y 150 / 1850
-constexpr uint16_t EDGE_SLOT_EXIT_MS = 3500;    // y  50 / 1950
+constexpr float INNER_SLOT_EXIT_MM = 750.0f;   // y 250 / 1750
+constexpr float MIDDLE_SLOT_EXIT_MM = 900.0f;  // y 150 / 1850
+constexpr float EDGE_SLOT_EXIT_MM = 1050.0f;   // y  50 / 1950
+constexpr uint16_t EXIT_MAX_MS = 7000;
 
 constexpr float STABLE_SLOT_X = 2900.0f - PAMI_AXLE_FROM_CENTER_MM;  // axe des roues
 
@@ -73,30 +77,56 @@ constexpr float STABLE_SLOT_X = 2900.0f - PAMI_AXLE_FROM_CENTER_MM;  // axe des 
 constexpr PamiProfile PAMI_PROFILES[] = {
     // id  rôle       micropas cible  départ (x, y, theta)          décalage sortie   durée
     // écurie 0 : intérieur (y 250), milieu (150), bord (50)
-    {5, Role::Attack, 8, 0, {STABLE_SLOT_X, 250.0f, table::FACING_ENEMY}, 0, EXIT_MAX_MM,
-     INNER_SLOT_EXIT_MS, nullptr, 0},  // -> zone 0 (la plus en biais)
-    {3, Role::Douve, 8, 1, {STABLE_SLOT_X, 150.0f, table::FACING_ENEMY}, 0, EXIT_MAX_MM,
-     MIDDLE_SLOT_EXIT_MS, nullptr, 0},  // -> pont
-    {1, Role::Douve, 8, 0, {STABLE_SLOT_X, 50.0f, table::FACING_ENEMY}, 0, EXIT_MAX_MM,
-     EDGE_SLOT_EXIT_MS, nullptr, 0},  // -> douve 0 (presque tout droit), ex-"Normal"
+    {5, Role::Attack, 8, 0, {STABLE_SLOT_X, 250.0f, table::FACING_ENEMY}, 0, INNER_SLOT_EXIT_MM,
+     EXIT_MAX_MS, nullptr, 0},  // -> zone 0 (la plus en biais)
+    {3, Role::Douve, 8, 1, {STABLE_SLOT_X, 150.0f, table::FACING_ENEMY}, 0, MIDDLE_SLOT_EXIT_MM,
+     EXIT_MAX_MS, nullptr, 0},  // -> pont
+    {1, Role::Douve, 8, 0, {STABLE_SLOT_X, 50.0f, table::FACING_ENEMY}, 0, EDGE_SLOT_EXIT_MM,
+     EXIT_MAX_MS, nullptr, 0},  // -> douve 0 (presque tout droit), ex-"Normal"
     // écurie 1 : intérieur (y 1750), milieu (1850), bord (1950)
-    {6, Role::Attack, 8, 1, {STABLE_SLOT_X, 1750.0f, table::FACING_ENEMY}, 0, EXIT_MAX_MM,
-     INNER_SLOT_EXIT_MS, nullptr, 0},  // -> zone 1 (la plus en biais)
-    {4, Role::Attack, 8, 2, {STABLE_SLOT_X, 1850.0f, table::FACING_ENEMY}, 0, EXIT_MAX_MM,
-     MIDDLE_SLOT_EXIT_MS, nullptr, 0},  // -> zone 2
-    {2, Role::Douve, 4, 2, {STABLE_SLOT_X, 1950.0f, table::FACING_ENEMY}, 0, EXIT_MAX_MM,
-     EDGE_SLOT_EXIT_MS, nullptr, 0},  // -> douve 2 (presque tout droit), ex-"Ninja"
+    {6, Role::Attack, 8, 1, {STABLE_SLOT_X, 1750.0f, table::FACING_ENEMY}, 0, INNER_SLOT_EXIT_MM,
+     EXIT_MAX_MS, nullptr, 0},  // -> zone 1 (la plus en biais)
+    {4, Role::Attack, 8, 2, {STABLE_SLOT_X, 1850.0f, table::FACING_ENEMY}, 0, MIDDLE_SLOT_EXIT_MM,
+     EXIT_MAX_MS, nullptr, 0},  // -> zone 2
+    {2, Role::Douve, 4, 2, {STABLE_SLOT_X, 1950.0f, table::FACING_ENEMY}, 0, EDGE_SLOT_EXIT_MM,
+     EXIT_MAX_MS, nullptr, 0},  // -> douve 2 (presque tout droit), ex-"Ninja"
 };
 
-// Attaque : le PAMI s'arrête quand la cible est à cette distance de l'axe
-// des roues (capteurs devant + couloir surveillé), puis avance encore de
-// ATTACK_CREEP_MM pour la toucher avant de déployer.
-constexpr float ATTACK_STOP_WITHIN_MM = SENSOR_OFFSET_X_MM + OBSTACLE_STOP_MM;
+// Attaque : le PAMI s'arrête quand la cible (sa face) est à cette distance de
+// l'axe des roues, soit ATTACK_CONTACT_GAP_MM devant son avant, puis avance
+// encore de ATTACK_CREEP_MM pour la toucher avant de déployer.
+// (Avant : capteurs + couloir surveillé, soit 21 cm devant l'avant : l'avance
+// de 8 cm ne suffisait jamais à toucher.)
+constexpr float FRONT_AHEAD_OF_AXLE_MM = PAMI_LENGTH_MM / 2 - PAMI_AXLE_FROM_CENTER_MM;
+constexpr float ATTACK_CONTACT_GAP_MM = 40.0f;
+constexpr float ATTACK_STOP_WITHIN_MM = FRONT_AHEAD_OF_AXLE_MM + ATTACK_CONTACT_GAP_MM;
 constexpr float ATTACK_CREEP_MM = 80.0f;
+constexpr uint32_t ATTACK_CREEP_MAX_MS = 1500;  // arrêté devant un coéquipier : déployer quand même
+// Zone d'attaque d'un coéquipier (table::ATTACK_ZONES) : disque de ce rayon,
+// où il stationne et pivote. Les autres PAMI n'y font ni esquive ni
+// contournement, et ne prennent pas pour cible ce qu'ils y voient.
+constexpr float TEAMMATE_ZONE_RADIUS_MM = 200.0f;
+// Un point vu par les capteurs à moins de cette distance du centre d'un PAMI
+// adverse (positions de la Jetson) est ce PAMI : demi-longueur + retard et
+// erreurs de position.
+constexpr float ENEMY_MATCH_RADIUS_MM = PAMI_LENGTH_MM / 2 + 60.0f;
+// Avec la position de nos robots (Jetson) : un adversaire à moins de cette
+// distance d'un coéquipier est déjà « pris » (contact, blocage) ; un
+// coéquipier à moins de ALLY_PATH_CLEARANCE_MM du trajet vers un adversaire
+// est sur le chemin. Dans les deux cas, on vise un autre adversaire.
+constexpr float ENGAGED_RADIUS_MM = PAMI_LENGTH_MM + 60.0f;
+constexpr float ALLY_PATH_CLEARANCE_MM = PAMI_LENGTH_MM / 2 + PAMI_WIDTH_MM / 2 + 20.0f;
 // Sans Wi-Fi, les PAMI d'attaque ne chassent aux capteurs qu'à partir de cet
 // instant : nos PAMI douve sont passés, ce que voient les capteurs est alors
 // plutôt adverse.
 constexpr uint32_t ATTACK_HUNT_FROM_MS = 94000;
+// ... et seulement de notre côté de la table (x >= cette valeur, repère bleu) :
+// les adversaires y passent pour rejoindre nos douves ; plus loin, ce que
+// voient les capteurs est plutôt un de nos PAMI douve, arrivé ou bloqué.
+constexpr float ATTACK_SENSOR_HUNT_MIN_X_MM = 1350.0f;
+// ... et pas sur le trajet de nos PAMI douve (à moins de cette distance de la
+// ligne sortie d'écurie -> douve) : un PAMI douve bloqué en route y est.
+constexpr float OWN_ROUTE_CLEARANCE_MM = 150.0f;
 // Avec les positions adverses de la Jetson (Wi-Fi) : on sait qui est adverse,
 // la chasse commence dès l'arrivée dans la zone, jusqu'à cette distance.
 constexpr float ATTACK_REMOTE_RANGE_MM = 700.0f;

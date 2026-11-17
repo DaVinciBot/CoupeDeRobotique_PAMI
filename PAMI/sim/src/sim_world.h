@@ -17,6 +17,7 @@ struct SimOptions {
     // Jetson simulée (Wi-Fi) : positions adverses à 10 Hz, recalage à 1 Hz,
     // comme si la caméra voyait tout parfaitement.
     bool jetson = true;
+    bool jetsonAllies = true;  // envoie aussi la position de nos autres PAMI
     uint32_t jetsonEnemiesPeriodMs = 100;
     uint32_t jetsonOdometryPeriodMs = 1000;
     uint32_t recordFromMs = 84000;

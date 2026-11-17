@@ -26,6 +26,9 @@ void Forward::update() {
     // Les capteurs ne voit que devant
     if (_mm > 0 && _sensor != nullptr && _sensor->healthy()) {
         bool obstacle = _sensor->obstacle();
+        if (obstacle && _isIgnored) {
+            obstacle = unknownObstacleAhead(*_sensor, _drive.pose(), _isIgnored);
+        }
         // Ce n'est qu'un obstacle connu (carrière...) : il ne bougera pas,
         // inutile d'attendre, on s'arrête là et on passe à la suite.
         if (obstacle && _isKnown && !unknownObstacleAhead(*_sensor, _drive.pose(), _isKnown)) {
@@ -53,6 +56,7 @@ void GoTo::start() {
     _lastRetargetMs = _startMs;
     _replanPending = false;
     _blockedSinceMs = 0;
+    _bypassTries = 0;
     // Graine du tirage au hasard : différente d'un PAMI à l'autre
     if (_rng == 0) _rng = ((uint32_t)(uintptr_t)this ^ (_startMs * 2654435761u)) | 1u;
     if (_opt.keepRightMm != 0.0f) {
@@ -96,8 +100,17 @@ void GoTo::planLeg() {
 
 // Arrivé : orientation finale si demandée, sinon terminé.
 void GoTo::finish() {
-    if (_opt.finalHeading) {
-        _drive.turn(wrapPi(_target.theta - _drive.pose().theta));
+    Pose p = _drive.pose();
+    if (_opt.faceTarget && distanceMm(p, _target) > 2.0f) {
+        float dTheta = wrapPi(headingTo(p, _target) - p.theta);
+        if (fabsf(dTheta) > 0.05f) {  // ~3° : inutile de tourner pour moins
+            _drive.turn(dTheta);
+            _phase = Phase::FinalTurn;
+            return;
+        }
+        _phase = Phase::Done;
+    } else if (_opt.finalHeading) {
+        _drive.turn(wrapPi(_target.theta - p.theta));
         _phase = Phase::FinalTurn;
     } else {
         _phase = Phase::Done;
@@ -228,6 +241,7 @@ void GoTo::update() {
             // Point de contournement atteint : reprendre vers la vraie cible
             if (_bypassing && (d <= 60.0f || !_drive.isBusy())) {
                 _bypassing = false;
+                _bypassTries = 0;
                 _target = _savedTarget;
                 _opt.stopWithinMm = _savedStopWithinMm;
                 _blockedSinceMs = 0;
@@ -352,6 +366,13 @@ bool GoTo::startBypass() {
         _target = _savedTarget;
         _opt.stopWithinMm = _savedStopWithinMm;
     }
+    // Plusieurs contournements de suite sans avancer : il n'y a pas la
+    // place de passer à côté, reculer d'abord (detour).
+    if (++_bypassTries > MAX_BYPASS_TRIES) {
+        Serial.println("[GoTo] contournement sans effet : recul");
+        _bypassTries = 0;
+        return false;
+    }
 
     // Où est l'obstacle ? Points des capteurs (hors obstacles connus) devant nous
     ObstaclePoint pts[ObstacleSensor::MAX_POINTS] = {};  // au-delà des points : non valides
@@ -397,8 +418,11 @@ bool GoTo::startBypass() {
         _opt.stopWithinMm = 0.0f;
         _blockedSinceMs = 0;
         _prevFrontMm = 0xFFFF;
-        if (_drive.isPaused()) _drive.stop();
-        if (!steerToTarget(_opt.smoothMaxRad, true)) planLeg();
+        // Pivoter vers le point de passage avant d'avancer : en courbe,
+        // l'obstacle resterait dans le couloir surveillé et le PAMI se
+        // remettrait aussitôt en pause, sans jamais bouger.
+        _drive.stop();
+        _replanPending = true;
         return true;
     }
     Serial.println("[GoTo] contournement : pas de place a cote (carte)");
@@ -408,11 +432,29 @@ bool GoTo::startBypass() {
 // ------------------------------------------------------------------
 // Contournement en reculant (s'il n'y a pas la place de passer à côté)
 // ------------------------------------------------------------------
+// Recul possible sans toucher la carte (bord, muraille) ? Aucun capteur
+// derrière : on vérifie au moins la carte. Renvoie la distance de recul
+// (want, sinon la moitié), 0 s'il n'y a pas la place.
+float GoTo::safeBackMm(float want) const {
+    if (!_opt.isPoseFree) return want;
+    Pose p = _drive.pose();
+    for (float d : {want, want / 2}) {
+        Pose back = {p.x - d * cosf(p.theta), p.y - d * sinf(p.theta), p.theta};
+        if (_opt.isPoseFree(back)) return d;
+    }
+    return 0.0f;
+}
+
 void GoTo::startDetour() {
     Serial.println("[GoTo] bloque : contournement");
     _blockedSinceMs = 0;
     _detourBackups = 0;
-    _drive.forward(-_opt.detourBackMm);  // remplace la consigne en pause
+    float back = safeBackMm(_opt.detourBackMm);
+    if (back > 0.0f) {
+        _drive.forward(-back);  // remplace la consigne en pause
+    } else {
+        _drive.stop();  // pas la place de reculer : se décaler d'ici
+    }
     _phase = Phase::DetourBack;
 }
 
@@ -431,9 +473,10 @@ void GoTo::chooseDetourSide() {
         return;
     }
     // Pas de place (passage étroit) : reculer encore pour en sortir
-    if (_detourBackups < MAX_DETOUR_BACKUPS) {
+    float back = safeBackMm(_opt.detourBackMm);
+    if (_detourBackups < MAX_DETOUR_BACKUPS && back > 0.0f) {
         _detourBackups++;
-        _drive.forward(-_opt.detourBackMm);
+        _drive.forward(-back);
         _phase = Phase::DetourBack;
         return;
     }

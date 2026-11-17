@@ -28,7 +28,8 @@ enum class MatchState : uint8_t {
     Manual = 3,     // mouvement lancé depuis la console
 };
 
-// Positions des PAMI adverses reçues en Wi-Fi (caméra de la Jetson).
+// Positions reçues en Wi-Fi (caméra de la Jetson) : PAMI adverses, ou nos
+// autres robots (coéquipiers).
 struct RemoteEnemies {
     static constexpr uint8_t MAX = 6;
     uint8_t count = 0;
@@ -53,6 +54,7 @@ struct App {
 
     // Reçu en Wi-Fi (remote.cpp)
     RemoteEnemies enemies;
+    RemoteEnemies allies;  // nos autres robots (PAMI, robot principal), sans nous
     bool remoteTeamSet = false;  // couleur imposée par l'hôte
     Team remoteTeam = Team::Blue;
 
@@ -74,6 +76,7 @@ void applyRoleIdlePosition(App& a);
 void remoteMatchStart(App& a, uint32_t elapsedMs);
 void remoteSetOdometry(App& a, const Pose& pose);
 void remoteEnemyPositions(App& a, const float* xs, const float* ys, uint8_t count);
+void remoteAllyPositions(App& a, const float* xs, const float* ys, uint8_t count);
 void remoteStop(App& a);
 void remoteSetTeam(App& a, Team team);
 void remoteJetsonText(App& a, const char* text, size_t len);  // texte de la Jetson
