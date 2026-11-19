@@ -49,8 +49,9 @@ navigateur. Il faut `g++` : MinGW ou MSYS2 sous Windows.
 |---|---|
 | Rampes des moteurs pas à pas (vitesse, accélération) | Patinage, pertes de pas : la position calculée = la vraie |
 | Capteurs ToF : rayons dans le cône de chaque capteur, sur les bords, les murailles des châteaux, les autres PAMI (carrières seulement si `CARRIERES_SUR_LA_TABLE` dans `table_2027.h`) | Bruit des capteurs, lumière ambiante, objets noirs ou brillants. Les remparts sont vus comme couverts de pierres (le cas le plus gênant) |
-| Les PAMI ne se traversent pas : un PAMI bloqué contre un autre (ou le bord) reste sur place, ses roues patinent et son odométrie dérive (affiché dans le résumé) | Pousser un autre PAMI. Les murailles ne bloquent pas : elles tombent (signalé) |
-| Adversaires : 3 PAMI qui vont tout droit vers nos douves | Vraie stratégie adverse, robots principaux |
+| Les PAMI ne se traversent pas : contre un autre PAMI, un PAMI glisse le long de lui (la part du mouvement qui va vers lui est retirée) ; s'il ne peut pas, il reste sur place, ses roues patinent et son odométrie dérive (affiché dans le résumé) | Pousser un autre PAMI. Les murailles ne bloquent pas : elles tombent (signalé) |
+| Attaque jugée comme le règlement (E.4.b) : en fin de match, l'actionneur déployé (`ATTACK_ACTUATOR_REACH_MM` x `ATTACK_ACTUATOR_WIDTH_MM` devant le PAMI) touche un PAMI adverse, et la carrosserie ne le touche pas (sinon « carrosserie au contact, non comptée », même si c'est l'adversaire qui est venu contre nous) | La forme réelle de l'actionneur |
+| Adversaires : le même code que nous, dans l'autre couleur | Vraie stratégie adverse, robots principaux |
 
 Les remplaçants du matériel sont dans `sim/include` (Arduino, FastAccelStepper,
 et `sim/src/sim_hw.cpp`. Les capteurs simulés passent par le même code que

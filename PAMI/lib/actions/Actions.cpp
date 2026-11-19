@@ -26,9 +26,6 @@ void Forward::update() {
     // Les capteurs ne voit que devant
     if (_mm > 0 && _sensor != nullptr && _sensor->healthy()) {
         bool obstacle = _sensor->obstacle();
-        if (obstacle && _isIgnored) {
-            obstacle = unknownObstacleAhead(*_sensor, _drive.pose(), _isIgnored);
-        }
         // Ce n'est qu'un obstacle connu (carrière...) : il ne bougera pas,
         // inutile d'attendre, on s'arrête là et on passe à la suite.
         if (obstacle && _isKnown && !unknownObstacleAhead(*_sensor, _drive.pose(), _isKnown)) {
@@ -57,8 +54,13 @@ void GoTo::start() {
     _replanPending = false;
     _blockedSinceMs = 0;
     _bypassTries = 0;
-    // Graine du tirage au hasard : différente d'un PAMI à l'autre
-    if (_rng == 0) _rng = ((uint32_t)(uintptr_t)this ^ (_startMs * 2654435761u)) | 1u;
+    // Graine du tirage au hasard : différente d'un PAMI à l'autre (ils ne
+    // sont jamais au même endroit), et reproductible en simulation
+    if (_rng == 0) {
+        Pose p0 = _drive.pose();
+        _rng = ((uint32_t)lroundf(p0.x) * 73856093u ^ (uint32_t)lroundf(p0.y) * 19349663u ^
+                _startMs * 2654435761u) | 1u;
+    }
     if (_opt.keepRightMm != 0.0f) {
         Pose p = _drive.pose();
         float heading = headingTo(p, _target);
@@ -91,6 +93,16 @@ void GoTo::planLeg() {
     Pose p = _drive.pose();
     if (distanceMm(p, _target) <= max(2.0f, _opt.stopWithinMm)) {
         finish();
+        return;
+    }
+    // Reprise (après une esquive, un contournement, une attente) : en courbe
+    // si possible, plus large qu'au départ, pour ne pas s'arrêter pivoter.
+    bool pivotNow = _pivotNext;
+    _pivotNext = false;
+    if (!pivotNow && _opt.smooth && _opt.replanSmoothMaxRad > 0.0f &&
+        steerToTarget(_opt.replanSmoothMaxRad, true)) {
+        _phase = Phase::Driving;
+        _prevFrontMm = 0xFFFF;
         return;
     }
     float dTheta = wrapPi(headingTo(p, _target) - p.theta);
@@ -256,6 +268,13 @@ void GoTo::update() {
                 return;
             }
             trackFront();
+            // Coincé sans que les capteurs voient l'obstacle : contourner
+            if (stalled()) {
+                Serial.println("[GoTo] bloque sans obstacle visible (capteurs figes) : contournement");
+                _blockedSinceMs = 0;
+                if (!(_opt.bypass && startBypass())) startDetour();
+                return;
+            }
             // Un PAMI vient vers nous : l'esquiver tout de suite, sans s'arrêter
             if (_opt.dodgeOncoming && d >= _opt.ignoreObstacleWithinMm && oncomingObstacle() &&
                 startDodge()) {
@@ -423,6 +442,7 @@ bool GoTo::startBypass() {
         // remettrait aussitôt en pause, sans jamais bouger.
         _drive.stop();
         _replanPending = true;
+        _pivotNext = true;
         return true;
     }
     Serial.println("[GoTo] contournement : pas de place a cote (carte)");
@@ -525,6 +545,41 @@ void GoTo::trackFront() {
     _prevFrontMs = now;
 }
 
+// Blocage invisible : l'odométrie a avancé de stallTravelMm, mais au moins 2
+// capteurs voient toujours les mêmes distances -> le PAMI n'a pas bougé
+// (roues qui patinent, moteurs qui sautent des pas). Il faut au moins 2
+// capteurs : un seul pourrait suivre un PAMI qui roule à notre vitesse, ou
+// longer un bord parallèle.
+bool GoTo::stalled() {
+    if (!_opt.detectStall || _sensor == nullptr || !_sensor->healthy()) return false;
+    uint32_t frame = _sensor->frames();
+    if (frame == _stallFrame) return false;
+    _stallFrame = frame;
+
+    ObstaclePoint pts[ObstacleSensor::MAX_POINTS] = {};
+    uint8_t n = _sensor->copyPoints(pts);
+    Pose p = _drive.pose();
+    if (_drive.isPaused() || !_drive.isMoving() || !_stallRefSet) {
+        _stallRefSet = !_drive.isPaused() && _drive.isMoving();
+        _stallRefPose = p;
+        for (uint8_t i = 0; i < n; ++i) {
+            _stallRefValid[i] = pts[i].valid;
+            _stallRefRange[i] = hypotf(pts[i].x, pts[i].y);
+        }
+        return false;
+    }
+    if (distanceMm(p, _stallRefPose) < _opt.stallTravelMm) return false;
+
+    uint8_t same = 0, compared = 0;
+    for (uint8_t i = 0; i < n; ++i) {
+        if (!pts[i].valid || !_stallRefValid[i]) continue;
+        ++compared;
+        if (fabsf(hypotf(pts[i].x, pts[i].y) - _stallRefRange[i]) <= _opt.stallToleranceMm) ++same;
+    }
+    _stallRefSet = false;  // nouvelle référence à la prochaine trame
+    return compared >= 2 && same == compared;
+}
+
 // Pose atteinte après un arc (longueur, rotation) partant de `from`.
 static Pose afterArc(const Pose& from, float length, float rotation) {
     float fx = length, fy = 0.0f;  // repère du PAMI
@@ -599,6 +654,94 @@ uint32_t GoTo::randomBetween(uint32_t lo, uint32_t hi) {
 void GoTo::stop() {
     _drive.stop();
     _phase = Phase::Done;
+}
+
+// ------------------------------------------------------------------
+// KeepDistance
+// ------------------------------------------------------------------
+void KeepDistance::start() {
+    _finished = false;
+    _pivoting = false;
+    _lastMs = millis() - _opt.periodMs;  // première consigne tout de suite
+}
+
+void KeepDistance::update() {
+    if (_finished) return;
+    if (_pivoting) {  // finir le pivot avant de recalculer
+        if (_drive.isBusy()) return;
+        _pivoting = false;
+    }
+    uint32_t now = millis();
+    if (now - _lastMs < _opt.periodMs) return;
+    _lastMs = now;
+
+    Pose p = _drive.pose();
+    Pose target;
+    if (!_opt.provider || !_opt.provider(p, target)) {
+        if (_drive.isBusy()) _drive.stop();  // cible perdue : on reste là
+        return;
+    }
+    float d = distanceMm(p, target);
+    float gap = d - _opt.frontAheadMm;  // avant du PAMI <-> face de la cible
+    float alpha = wrapPi(headingTo(p, target) - p.theta);
+    // La position de la cible donne un écart prudent (son orientation n'est
+    // pas connue) ; ce que mesurent les capteurs devant nous est l'écart réel
+    // avec ce qu'il y a de plus proche : on le préfère quand ils le voient.
+    if (_sensor != nullptr && _sensor->healthy() && _sensor->frontMinMm() != 0xFFFF &&
+        fabsf(alpha) < _opt.maxHeadingRad) {
+        gap = _sensor->frontMinMm() - (_opt.frontAheadMm - _opt.sensorAheadMm);
+    }
+    float error = gap - _opt.gapMm;  // > 0 : trop loin
+
+    // Trop près (elle s'approche, ou il faut pivoter) : reculer, si la carte le permet
+    bool needPivot = fabsf(alpha) > _opt.maxHeadingRad;
+    if (error < -_opt.toleranceMm || (needPivot && gap < _opt.gapMm + 30.0f)) {
+        float back = fminf(_opt.gapMm + 30.0f - gap, _opt.maxStepMm);
+        Pose after = {p.x - back * cosf(p.theta), p.y - back * sinf(p.theta), p.theta};
+        if (back > 2.0f && (!_opt.isPoseFree || _opt.isPoseFree(after))) _drive.forward(-back);
+        return;
+    }
+    if (needPivot) {  // cible sur le côté : pivoter face à elle
+        _drive.turn(alpha);
+        _pivoting = true;
+        return;
+    }
+    if (error > _opt.toleranceMm) {  // trop loin : avancer en courbe vers elle
+        // ... sauf vers un obstacle qui n'est pas la cible (coéquipier)
+        if (_sensor != nullptr && _sensor->healthy() && _sensor->obstacle() &&
+            unknownObstacleAhead(*_sensor, p, _opt.isIgnored)) {
+            if (_drive.isBusy()) _drive.stop();
+            return;
+        }
+        // Arc tangent au cap actuel qui passe par la cible (comme GoTo),
+        // limité à maxStepMm et arrêté à gapMm de sa face.
+        float part = fminf(error, _opt.maxStepMm) / d;
+        float arcLen = fabsf(alpha) < 1e-3f ? d : d * alpha / sinf(alpha);
+        float length = arcLen * part, rotation = 2.0f * alpha * part;
+        // Pas sur la carte (muraille, bord, zone d'un coéquipier) : rester là
+        if (_opt.isPoseFree) {
+            for (int k = 1; k <= 4; ++k) {
+                if (!_opt.isPoseFree(afterArc(p, length * k / 4, rotation * k / 4))) {
+                    if (_drive.isBusy()) _drive.stop();
+                    return;
+                }
+            }
+        }
+        _drive.arc(length, rotation);
+        return;
+    }
+    // À la bonne distance : seulement rester face à elle
+    if (fabsf(alpha) > 0.08f) {  // ~5°
+        _drive.turn(alpha);
+        _pivoting = true;
+    } else if (_drive.isBusy()) {
+        _drive.stop();
+    }
+}
+
+void KeepDistance::stop() {
+    _drive.stop();
+    _finished = true;
 }
 
 // ------------------------------------------------------------------

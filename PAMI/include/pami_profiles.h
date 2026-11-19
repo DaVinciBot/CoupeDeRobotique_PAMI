@@ -92,16 +92,29 @@ constexpr PamiProfile PAMI_PROFILES[] = {
      EXIT_MAX_MS, nullptr, 0},  // -> douve 2 (presque tout droit), ex-"Ninja"
 };
 
-// Attaque : le PAMI s'arrête quand la cible (sa face) est à cette distance de
-// l'axe des roues, soit ATTACK_CONTACT_GAP_MM devant son avant, puis avance
-// encore de ATTACK_CREEP_MM pour la toucher avant de déployer.
-// (Avant : capteurs + couloir surveillé, soit 21 cm devant l'avant : l'avance
-// de 8 cm ne suffisait jamais à toucher.)
+// Attaque. Règlement 2027 (E.4.b) : l'attaque compte si l'ACTIONNEUR touche
+// un PAMI adverse en fin de match, et seul l'actionneur a le droit de le
+// toucher (pas la carrosserie). Le PAMI s'approche donc à
+// ATTACK_APPROACH_GAP_MM, déploie l'actionneur, puis se tient à
+// ATTACK_HOLD_GAP_MM de la face adverse (AttackHold) jusqu'à la fin du
+// match, en suivant sa cible si elle bouge.
 constexpr float FRONT_AHEAD_OF_AXLE_MM = PAMI_LENGTH_MM / 2 - PAMI_AXLE_FROM_CENTER_MM;
-constexpr float ATTACK_CONTACT_GAP_MM = 40.0f;
-constexpr float ATTACK_STOP_WITHIN_MM = FRONT_AHEAD_OF_AXLE_MM + ATTACK_CONTACT_GAP_MM;
-constexpr float ATTACK_CREEP_MM = 80.0f;
-constexpr uint32_t ATTACK_CREEP_MAX_MS = 1500;  // arrêté devant un coéquipier : déployer quand même
+// /!\ À MESURER sur le PAMI : de combien l'actionneur déployé dépasse de
+// l'avant du PAMI, et sa largeur. Valeurs provisoires.
+constexpr float ATTACK_ACTUATOR_REACH_MM = 60.0f;
+constexpr float ATTACK_ACTUATOR_WIDTH_MM = 30.0f;  // (simulation)
+// Écart avant du PAMI <-> face adverse tenu pendant l'attaque : l'actionneur
+// (REACH) dépasse de 20 mm sur l'adversaire, la carrosserie reste à distance.
+constexpr float ATTACK_HOLD_GAP_MM = ATTACK_ACTUATOR_REACH_MM - 20.0f;
+constexpr float ATTACK_HOLD_TOLERANCE_MM = 12.0f;  // +/- avant de corriger
+// Écart à la fin de l'approche (avant de déployer) : un peu plus large.
+constexpr float ATTACK_APPROACH_GAP_MM = ATTACK_HOLD_GAP_MM + 40.0f;
+constexpr float ATTACK_STOP_WITHIN_MM = FRONT_AHEAD_OF_AXLE_MM + ATTACK_APPROACH_GAP_MM;
+// Coin d'un PAMI adverse depuis son centre : pire cas de sa surface vers
+// nous (son orientation n'est pas connue). Gabarit supposé égal au nôtre.
+constexpr float ENEMY_CORNER_FROM_CENTER_MM = 106.0f;  // hypot(190 / 2, 95 / 2)
+// Cap à tenir face à la cible : au-delà, pivoter ; en dessous, corriger en courbe.
+constexpr float ATTACK_HOLD_MAX_HEADING_RAD = 0.35f;  // 20°
 // Zone d'attaque d'un coéquipier (table::ATTACK_ZONES) : disque de ce rayon,
 // où il stationne et pivote. Les autres PAMI n'y font ni esquive ni
 // contournement, et ne prennent pas pour cible ce qu'ils y voient.
@@ -145,6 +158,18 @@ constexpr float KEEP_RIGHT_MM = 60.0f;
 // Un point de passage est « atteint » à cette distance : le PAMI enchaîne
 // alors vers le suivant en courbe, sans freiner.
 constexpr float PASS_THROUGH_MM = 100.0f;
+// Courbes : vers une cible jusqu'à cet écart d'angle, le PAMI part en arc
+// (avance et tourne en même temps) au lieu de pivoter sur place puis avancer.
+// Réglages comparés en simulation (36 matchs en 6 contre 6, 9 vitesses) :
+//   - trajets en courbe jusqu'à 60° : 3 fois plus de douves atteintes qu'à
+//     30°, mais plus de frottements entre voisins d'écurie quand ils
+//     manœuvrent face à un adversaire (aucun sans adversaire) ;
+//   - chasse de l'attaque : 30° (plus large, la cible est moins souvent atteinte) ;
+//   - reprises après esquive, contournement ou attente : pivot (en courbe,
+//     les voisins d'écurie se gênent davantage).
+constexpr float TRAVEL_SMOOTH_MAX_RAD = 1.05f;        // 60°
+constexpr float HUNT_SMOOTH_MAX_RAD = 0.52f;          // 30°
+constexpr float TRAVEL_REPLAN_SMOOTH_MAX_RAD = 0.0f;  // 0 = pivot
 // Douve : à l'approche, on ignore les capteurs (rempart, pierres autour des douves).
 constexpr float DOUVE_IGNORE_OBSTACLE_WITHIN_MM = 150.0f;
 

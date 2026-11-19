@@ -79,12 +79,6 @@ class Forward : public Action {
         _minMs = ms;
         return *this;
     }
-    // Ne s'arrêter que pour les points des capteurs que ce filtre ne reconnaît
-    // pas (attaque : on veut toucher l'adversaire, pas un coéquipier).
-    Forward& ignoreObstacles(KnownObstacleFilter isIgnored) {
-        _isIgnored = isIgnored;
-        return *this;
-    }
     void start() override;
     void update() override;
     void stop() override;
@@ -97,7 +91,6 @@ class Forward : public Action {
     float _mm;
     uint32_t _maxMs;
     KnownObstacleFilter _isKnown = nullptr;
-    KnownObstacleFilter _isIgnored = nullptr;
     uint32_t _minMs = 0;
     uint32_t _startMs = 0;
     bool _timeUp = false;
@@ -194,6 +187,9 @@ class GoTo : public Action {
         bool smooth = false;
         // Au-delà, l'arc ferait une grande boucle : pivoter est plus court.
         float smoothMaxRad = 0.52f;  // 30°
+        // Idem pour les reprises (après esquive, contournement, attente).
+        // 0 = toujours pivoter.
+        float replanSmoothMaxRad = 0.0f;
         // Point de passage : terminé à cette distance, SANS freiner ; le
         // GoTo suivant enchaîne directement vers le point d'après.
         float passThroughMm = 0.0f;
@@ -222,6 +218,14 @@ class GoTo : public Action {
         bool follow = false;
         uint16_t followMinMm = 130;
         float followClosingMmS = 80.0f;
+
+        // Blocage invisible : sans retour des roues, un PAMI coincé (contre
+        // un autre, trop près pour les capteurs) croit avancer. Si, après
+        // stallTravelMm d'odométrie, au moins 2 capteurs voient les mêmes
+        // distances (à stallToleranceMm près), il n'a pas bougé : contourner.
+        bool detectStall = false;
+        float stallTravelMm = 100.0f;
+        float stallToleranceMm = 15.0f;
     };
 
     GoTo(DiffDrive& drive, const ObstacleSensor* sensor, const Pose& target)
@@ -266,6 +270,7 @@ class GoTo : public Action {
     void waitThenReplan();
     uint32_t randomBetween(uint32_t lo, uint32_t hi);
     void trackFront();
+    bool stalled();
     bool oncomingObstacle() const { return _oncomingFrames >= 2; }
     bool startDodge();
     void updateDodge();
@@ -276,6 +281,7 @@ class GoTo : public Action {
     Options _opt;
     Phase _phase = Phase::Done;
     bool _replanPending = false;
+    bool _pivotNext = false;  // prochaine reprise : pivoter (contournement)
     uint32_t _startMs = 0;
     uint32_t _lastRetargetMs = 0;
     uint32_t _blockedSinceMs = 0;  // 0 = pas bloqué
@@ -295,12 +301,63 @@ class GoTo : public Action {
     float _dodgeSide = 0.0f;  // -1 droite, +1 gauche
     float _dodgeStartHeading = 0.0f;
 
+    // Blocage invisible : distances des capteurs et odométrie de référence
+    bool _stallRefSet = false;
+    Pose _stallRefPose;
+    float _stallRefRange[ObstacleSensor::MAX_POINTS] = {};
+    bool _stallRefValid[ObstacleSensor::MAX_POINTS] = {};
+    uint32_t _stallFrame = 0;
+
     // Contournement direct : cible provisoire à côté de l'obstacle
     bool _bypassing = false;
     uint8_t _bypassTries = 0;  // contournements de suite sans atteindre le point de passage
     static constexpr uint8_t MAX_BYPASS_TRIES = 3;
     Pose _savedTarget;
     float _savedStopWithinMm = 0.0f;
+};
+
+// ------------------------------------------------------------------
+// Se tenir face à une cible qui bouge, à `gapMm` devant l'avant du PAMI,
+// jusqu'à stop() (fin du match). Attaque : l'actionneur déployé touche la
+// cible, la carrosserie non (règlement). Corrige en courbe si la cible est à
+// peu près devant, pivote sinon (après avoir reculé si elle est trop près),
+// recule si elle s'approche. N'avance pas vers un obstacle que `isIgnored`
+// ne reconnaît pas (un coéquipier).
+// ------------------------------------------------------------------
+class KeepDistance : public Action {
+   public:
+    struct Options {
+        GoTo::TargetProvider provider = nullptr;  // face de la cible
+        float frontAheadMm = 0.0f;  // avant du PAMI devant l'axe des roues
+        // Point de référence des capteurs devant l'axe : la distance mesurée
+        // dans le couloir (frontMinMm) donne l'écart réel, plus juste que la
+        // position de la cible (orientation inconnue). /!\ L'actionneur
+        // déployé ne doit pas être dans le champ des capteurs.
+        float sensorAheadMm = 0.0f;
+        float gapMm = 40.0f;
+        float toleranceMm = 12.0f;
+        float maxHeadingRad = 0.35f;  // au-delà : pivoter
+        float maxStepMm = 150.0f;     // avance au plus de ça par consigne
+        uint32_t periodMs = 100;
+        KnownObstacleFilter isIgnored = nullptr;
+        std::function<bool(const Pose& pose)> isPoseFree = nullptr;
+    };
+
+    KeepDistance(DiffDrive& drive, const ObstacleSensor* sensor, const Options& options)
+        : _drive(drive), _sensor(sensor), _opt(options) {}
+    void start() override;
+    void update() override;
+    void stop() override;
+    bool isFinished() const override { return _finished; }
+    const char* name() const override { return "KeepDistance"; }
+
+   private:
+    DiffDrive& _drive;
+    const ObstacleSensor* _sensor;
+    Options _opt;
+    uint32_t _lastMs = 0;
+    bool _pivoting = false;
+    bool _finished = false;
 };
 
 // ------------------------------------------------------------------

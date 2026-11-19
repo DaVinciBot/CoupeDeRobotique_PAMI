@@ -164,6 +164,39 @@ Box SimWorld::pamiBox(const SimPami& p) const {
     return boxAt(p.truePose);
 }
 
+// Actionneur d'attaque déployé : rectangle devant le PAMI
+// (ATTACK_ACTUATOR_REACH_MM x ATTACK_ACTUATOR_WIDTH_MM). false s'il est rentré.
+bool SimWorld::actuatorBox(const SimPami& p, Box& out) const {
+    if (p.app->role != Role::Attack || p.app->servo.angle() + 5 < ATTACK_SERVO_DEPLOY_DEG) {
+        return false;
+    }
+    Box b = pamiBox(p);
+    double ahead = b.hl + ATTACK_ACTUATOR_REACH_MM / 2.0;
+    out = {b.cx + ahead * cos(b.th), b.cy + ahead * sin(b.th), b.th,
+           ATTACK_ACTUATOR_REACH_MM / 2.0, ATTACK_ACTUATOR_WIDTH_MM / 2.0};
+    return true;
+}
+
+// Fin de match, règlement E.4.b : l'attaque compte si l'actionneur touche un
+// PAMI adverse, et seul l'actionneur peut le toucher. Renvoie le nom de la
+// cible touchée ("" sinon) ; `bodyContact` : la carrosserie touche un adversaire.
+std::string SimWorld::attackResult(const SimPami& p, bool& bodyContact) const {
+    bodyContact = false;
+    Box body = pamiBox(p);
+    body.hl += 2.0;  // contact = à moins de 2 mm
+    body.hw += 2.0;
+    Box arm;
+    bool deployed = actuatorBox(p, arm);
+    std::string touched;
+    for (const SimPami& o : _pamis) {
+        if (o.ours == p.ours) continue;
+        Box ob = pamiBox(o);
+        if (overlapBoxBox(body, ob)) bodyContact = true;
+        if (deployed && touched.empty() && overlapBoxBox(arm, ob)) touched = pamiName(o.logId);
+    }
+    return touched;
+}
+
 // Applique à la vraie position de chaque PAMI le déplacement mesuré par son
 // odométrie depuis le pas précédent, sauf s'il le ferait entrer dans un autre
 // PAMI ou sortir de la table : il reste alors bloqué (les roues patinent).
@@ -189,13 +222,51 @@ void SimWorld::moveBodies() {
         if (ahead == 0.0 && side == 0.0 && dTheta == 0.0) continue;
 
         double c = cos(p.truePose.theta), s = sin(p.truePose.theta);
-        Pose next = {(float)(p.truePose.x + c * ahead - s * side),
-                     (float)(p.truePose.y + s * ahead + c * side),
+        double mx = c * ahead - s * side, my = s * ahead + c * side;  // repère table
+        // Position libre (dans la table, sans recouvrir un autre PAMI) ?
+        // `hitIndex` : le PAMI touché, -1 pour le bord.
+        auto freeAt = [&](const Pose& q, int& hitIndex) {
+            Box nb = boxAt(q);
+            hitIndex = -1;
+            if (boxOutsideTable(nb) && !boxOutsideTable(pamiBox(p))) return false;
+            for (size_t j = 0; j < _pamis.size(); ++j) {
+                if (j != i && overlapBoxBox(nb, pamiBox(_pamis[j]))) {
+                    hitIndex = (int)j;
+                    return false;
+                }
+            }
+            return true;
+        };
+        Pose next = {(float)(p.truePose.x + mx), (float)(p.truePose.y + my),
                      wrapPi(p.truePose.theta + (float)dTheta)};
-        Box nb = boxAt(next);
-        bool free = !boxOutsideTable(nb) || boxOutsideTable(pamiBox(p));
-        for (size_t j = 0; free && j < _pamis.size(); ++j) {
-            if (j != i && overlapBoxBox(nb, pamiBox(_pamis[j]))) free = false;
+        int hitIndex = -1;
+        bool free = freeAt(next, hitIndex);
+        // Contre un autre PAMI : glisser le long de lui (on retire la part du
+        // déplacement qui va vers lui), comme le feraient de vraies roues, au
+        // lieu de rester collé. Sans rotation, puis sans translation.
+        if (!free && hitIndex >= 0) {
+            Box me = pamiBox(p), other = pamiBox(_pamis[hitIndex]);
+            double nx = me.cx - other.cx, ny = me.cy - other.cy;
+            double n = hypot(nx, ny);
+            if (n > 1e-6) {
+                nx /= n;
+                ny /= n;
+                double into = mx * nx + my * ny;  // < 0 : vers l'autre PAMI
+                double tx = into < 0 ? mx - into * nx : mx, ty = into < 0 ? my - into * ny : my;
+                const Pose tries[3] = {
+                    {(float)(p.truePose.x + tx), (float)(p.truePose.y + ty), next.theta},
+                    {(float)(p.truePose.x + tx), (float)(p.truePose.y + ty), p.truePose.theta},
+                    {p.truePose.x, p.truePose.y, next.theta},
+                };
+                for (const Pose& q : tries) {
+                    int dummy;
+                    if (freeAt(q, dummy)) {
+                        next = q;
+                        free = true;
+                        break;
+                    }
+                }
+            }
         }
         if (free) {
             p.truePose = next;
@@ -532,6 +603,19 @@ void SimWorld::printSummary() const {
                    pamiName(p.logId).c_str(), roleName(p.app->role), q.x, q.y, d);
             if (p.maxDriftMm >= 5.0f) {
                 printf("  (bloque : odometrie fausse de %.0f mm)", p.maxDriftMm);
+            }
+            if (p.app->role == Role::Attack) {
+                bool bodyContact = false;
+                std::string touched = attackResult(p, bodyContact);
+                if (bodyContact) {
+                    // Souvent l'adversaire qui vient contre nous ; par prudence,
+                    // l'attaque n'est pas comptée (seul l'actionneur doit toucher)
+                    printf("  [attaque : carrosserie au contact, non comptee]");
+                } else if (!touched.empty()) {
+                    printf("  [attaque : validee sur %s]", touched.c_str());
+                } else {
+                    printf("  [attaque : rien]");
+                }
             }
             printf("\n");
         }

@@ -80,8 +80,13 @@ GoTo::TargetProvider nearestEnemyCandidate(App& a) {
                 if (d < best && d > 1.0f &&
                     !allyInTheWay(a, robot, a.enemies.x[i], a.enemies.y[i])) {
                     best = d;
-                    // viser sa face, pas son centre (stopWithin compte depuis la surface)
-                    float back = (PAMI_LENGTH_MM / 2) / d;
+                    // viser sa surface, pas son centre (stopWithin compte depuis
+                    // la surface). On ne connaît pas son orientation : on prend
+                    // le pire cas, son coin (le plus loin de son centre, donc le
+                    // plus près de nous), pour ne jamais le toucher avec la
+                    // carrosserie ; les capteurs donnent ensuite la vraie
+                    // distance (KeepDistance).
+                    float back = ENEMY_CORNER_FROM_CENTER_MM / d;
                     out = {a.enemies.x[i] - dx * back, a.enemies.y[i] - dy * back, 0.0f};
                     found = true;
                 }
@@ -194,10 +199,13 @@ GoTo::Options travelOptions(const App& a) {
     o.detourAfterMs = DETOUR_AFTER_MS;
     o.dodgeOncoming = true;
     o.smooth = true;
+    o.smoothMaxRad = TRAVEL_SMOOTH_MAX_RAD;
+    o.replanSmoothMaxRad = TRAVEL_REPLAN_SMOOTH_MAX_RAD;
     o.isPoseFree = [&a](const Pose& p) { return isPoseFree(p, &a); };
     o.isKnownObstacle = isKnownObstacle;
     o.follow = true;
     o.bypass = true;
+    o.detectStall = true;
     o.halfWidthMm = PAMI_WIDTH_MM / 2;
     o.sensorOffsetMm = SENSOR_OFFSET_X_MM;
     return o;
@@ -256,28 +264,39 @@ void addAttack(App& a, Strategy& s) {
     toZone.stopWithinMm = CENTER_AHEAD_OF_AXLE_MM;
     s.add(new GoTo(a.drive, a.sensorsOrNull(), zone, toZone));
 
-    // 3) Attendre qu'un PAMI adverse passe à portée des capteurs (~30 cm), puis
-    //    le suivre en corrigeant la direction en roulant, jusqu'à
-    //    ATTACK_STOP_WITHIN_MM de lui.
-    //    L'obstacle, c'est la cible : on ne s'arrête que devant ce qui n'est
-    //    pas un adversaire (un coéquipier, si la Jetson donne les positions).
+    // 2) Attendre qu'un PAMI adverse passe à portée, puis le rejoindre en
+    //    courbe (cap corrigé en roulant) jusqu'à ATTACK_APPROACH_GAP_MM de sa
+    //    face. L'obstacle, c'est la cible : on ne s'arrête que devant ce qui
+    //    n'est pas un adversaire (un coéquipier, si la Jetson donne les positions).
     GoTo::Options hunt;
     hunt.timeoutMs = 0;  // jusqu'à la fin du match
     hunt.isKnownObstacle = isEnemyOrKnown(a);
     hunt.stopWithinMm = ATTACK_STOP_WITHIN_MM;
     hunt.faceTarget = true;
+    hunt.smooth = true;
+    hunt.smoothMaxRad = HUNT_SMOOTH_MAX_RAD;
+    hunt.replanSmoothMaxRad = HUNT_SMOOTH_MAX_RAD;
+    hunt.isPoseFree = [&a](const Pose& p) { return isPoseFree(p, &a); };
     hunt.provider = nearestEnemyCandidate(a);
     hunt.waitForTarget = true;
     hunt.retargetPeriodMs = 200;
     hunt.retargetMinMm = 20.0f;
     s.add(new GoTo(a.drive, a.sensorsOrNull(), zone, hunt));
 
-    // 4) Avancer pour toucher (sans s'arrêter devant l'adversaire, mais devant
-    //    un coéquipier), puis déployer.
-    Forward* creep = new Forward(a.drive, a.sensorsOrNull(), ATTACK_CREEP_MM, ATTACK_CREEP_MAX_MS);
-    creep->ignoreObstacles(isEnemyOrKnown(a));
-    s.add(creep);
+    // 3) Déployer l'actionneur, puis se tenir à ATTACK_HOLD_GAP_MM de la face
+    //    adverse jusqu'à la fin du match : l'actionneur touche, la carrosserie
+    //    non (règlement). Si l'adversaire bouge, on le suit.
     s.add(new ServoMove(a.servo, ATTACK_SERVO_DEPLOY_DEG));  // tenu jusqu'à la fin
+    KeepDistance::Options hold;
+    hold.provider = nearestEnemyCandidate(a);
+    hold.frontAheadMm = FRONT_AHEAD_OF_AXLE_MM;
+    hold.sensorAheadMm = SENSOR_OFFSET_X_MM;
+    hold.gapMm = ATTACK_HOLD_GAP_MM;
+    hold.toleranceMm = ATTACK_HOLD_TOLERANCE_MM;
+    hold.maxHeadingRad = ATTACK_HOLD_MAX_HEADING_RAD;
+    hold.isIgnored = isEnemyOrKnown(a);
+    hold.isPoseFree = [&a](const Pose& p) { return isPoseFree(p, &a); };
+    s.add(new KeepDistance(a.drive, a.sensorsOrNull(), hold));
 }
 
 }  // namespace

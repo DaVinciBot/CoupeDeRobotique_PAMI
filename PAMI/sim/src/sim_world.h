@@ -77,6 +77,8 @@ class SimWorld {
    private:
     Box pamiBox(const SimPami& p) const;
     Box boxAt(const Pose& axle) const;
+    bool actuatorBox(const SimPami& p, Box& out) const;
+    std::string attackResult(const SimPami& p, bool& bodyContact) const;
     void moveBodies();
     void jetson(uint32_t tMs);
     void scanTof(SimPami& p, size_t index);
