@@ -19,6 +19,7 @@ static void usage() {
         "  --team bleu|jaune     equipe de nos PAMI (defaut : bleu)\n"
         "  --no-enemies          sans les 6 PAMI adverses\n"
         "  --no-jetson           sans Jetson (pas de Wi-Fi : capteurs seuls)\n"
+        "  --enemy-classic       adversaire sans recherche de chemin\n"
         "  --no-allies           la Jetson n'envoie que les adversaires (pas nos PAMI)\n"
         "  --speed MM_S          vitesse max des PAMI (defaut : config.h)\n"
         "  --out FICHIER         fichier de sortie (defaut : sim/out/sim_data.js)\n"
@@ -28,6 +29,7 @@ static void usage() {
 
 int main(int argc, char** argv) {
     SimOptions opt;
+    bool enemyClassic = false;
     const char* out = "sim/out/sim_data.js";
     for (int i = 1; i < argc; ++i) {
         if (!strcmp(argv[i], "--team") && i + 1 < argc) {
@@ -36,6 +38,8 @@ int main(int argc, char** argv) {
             opt.enemies = false;
         } else if (!strcmp(argv[i], "--no-jetson")) {
             opt.jetson = false;
+        } else if (!strcmp(argv[i], "--enemy-classic")) {
+            enemyClassic = true;
         } else if (!strcmp(argv[i], "--no-allies")) {
             opt.jetsonAllies = false;
         } else if (!strcmp(argv[i], "--speed") && i + 1 < argc) {
@@ -59,6 +63,9 @@ int main(int argc, char** argv) {
             App* a = new App();
             int logId = ours ? p.id : 100 + p.id;
             g_currentPami = logId;
+            // --enemy-classic : l'adversaire sans recherche de chemin (pour
+            // mesurer son effet sur notre équipe seule)
+            if (!ours && enemyClassic) a->pathPlanning = false;
             appBegin(*a, p.id);
             if (opt.speedMmS > 0.0f) a->drive.setSpeed(opt.speedMmS);
             world.addPami(a, logId, ours, ours ? opt.team : enemyTeam);

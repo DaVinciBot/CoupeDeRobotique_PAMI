@@ -38,6 +38,8 @@
   td, th { text-align: left; padding: 4px 6px; border-bottom: 1px solid var(--border); white-space: nowrap; }
   th { color: var(--muted); font-weight: 500; }
   .swatch { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; vertical-align: -1px; }
+  .legend { margin: 10px 0 0; font-size: 12px; color: var(--muted); line-height: 1.7; }
+  .legend .swatch { margin-right: 2px; }
   .state-bad { color: var(--bad); font-weight: 600; }
   .state-warn { color: var(--warn); }
   #events { max-height: 360px; overflow: auto; font-size: 13px; }
@@ -73,6 +75,7 @@
   <label class="toggle"><input type="checkbox" id="showLidar" checked> capteurs ToF</label>
   <label class="toggle"><input type="checkbox" id="showTrails" checked> traces</label>
   <label class="toggle"><input type="checkbox" id="showTargets" checked> trajets prévus</label>
+  <label class="toggle"><input type="checkbox" id="showPaths" checked> chemins calculés</label>
   <label class="toggle"><input type="checkbox" id="showObstacles"> carrières</label>
 </header>
 
@@ -90,6 +93,11 @@
       <h2>PAMI</h2>
       <table><thead><tr><th>Nom</th><th>Rôle</th><th>Action</th><th>État</th><th>Cible</th></tr></thead>
         <tbody id="bodies"></tbody></table>
+      <p class="legend">
+        <span class="swatch" style="background:#1e3a8a"></span><span class="swatch" style="background:#9a3412"></span>
+        foncé, contour cyan : Wi-Fi 6E + Jetson (vrai chemin, en cyan pointillé)<br>
+        <span class="swatch" style="background:#60a5fa"></span><span class="swatch" style="background:#fde047"></span>
+        clair : sans Jetson (capteurs seuls)</p>
     </div>
     <div class="panel">
       <h2>Journal <label class="toggle" style="float:right;text-transform:none;letter-spacing:0">
@@ -130,9 +138,16 @@
   const t0 = frames[0][0], tEnd = frames[frames.length - 1][0];
   const period = frames.length > 1 ? frames[1][0] - frames[0][0] : 20;
 
-  const ourColor = D.team === "bleu" ? "#2f6fe4" : "#e0b100";
-  const enemyColor = D.team === "bleu" ? "#e0b100" : "#2f6fe4";
-  const palette = D.bodies.map(b => b.side === "ours" ? ourColor : enemyColor);
+  // Couleur d'équipe ; foncée pour les PAMI avec Wi-Fi 6E + Jetson (ils
+  // connaissent la position des robots et calculent un vrai chemin), claire
+  // pour ceux qui n'ont que leurs capteurs.
+  const COLORS = { bleu: { wifi: "#1e3a8a", seul: "#60a5fa" }, jaune: { wifi: "#9a3412", seul: "#fde047" } };
+  const enemyTeam = D.team === "bleu" ? "jaune" : "bleu";
+  const palette = D.bodies.map(b => COLORS[b.side === "ours" ? D.team : enemyTeam][b.wifi ? "wifi" : "seul"]);
+  const WIFI_OUTLINE = "#22d3ee";
+  // Chemins calculés, par PAMI, triés par temps : [t, [x, y, ...]]
+  const pathsByBody = D.bodies.map(() => []);
+  (D.paths || []).forEach(([t, i, xy]) => pathsByBody[i].push([t, xy]));
 
   const img = new Image();
   let imgOk = false;
@@ -243,6 +258,32 @@
       }
     }
 
+    if ($("showPaths").checked) {
+      const t = frames[cur][0];
+      for (let i = 0; i < N; i++) {
+        const list = pathsByBody[i];
+        let last = null;
+        for (const p of list) { if (p[0] <= t) last = p; else break; }
+        const b = bodyAt(cur, i);
+        if (!last || !last[1].length || (b.flags & 16)) continue;
+        // depuis le centre du PAMI, à travers les points du chemin
+        const cx = b.x - D.pami.axle * Math.cos(b.th), cy = b.y - D.pami.axle * Math.sin(b.th);
+        const pts = [[cx, cy]];
+        for (let k = 0; k < last[1].length; k += 2) pts.push([last[1][k], last[1][k + 1]]);
+        ctx.beginPath();
+        pts.forEach(([x, y], k) => { const [u, v] = px(x, y); k ? ctx.lineTo(u, v) : ctx.moveTo(u, v); });
+        ctx.lineJoin = "round";
+        ctx.setLineDash([]); ctx.strokeStyle = "rgba(0,0,0,.6)"; ctx.lineWidth = 5; ctx.stroke();
+        ctx.setLineDash([8, 5]); ctx.strokeStyle = WIFI_OUTLINE; ctx.lineWidth = 2.5; ctx.stroke();
+        ctx.setLineDash([]);
+        pts.slice(1).forEach(([x, y]) => {
+          const [u, v] = px(x, y);
+          ctx.beginPath(); ctx.arc(u, v, 3.5, 0, 2 * Math.PI);
+          ctx.fillStyle = WIFI_OUTLINE; ctx.fill();
+        });
+      }
+    }
+
     for (let i = 0; i < N; i++) {
       const meta = D.bodies[i], b = bodyAt(cur, i);
       const hw = D.pami.width / 2;
@@ -270,7 +311,8 @@
 
       const collide = b.flags & 2;
       poly([local(b, front, hw), local(b, front, -hw), local(b, back, -hw), local(b, back, hw)],
-           palette[i], collide ? "#ff1f1f" : "rgba(0,0,0,.65)", collide ? 3.5 : 1.5);
+           palette[i], collide ? "#ff1f1f" : meta.wifi ? WIFI_OUTLINE : "rgba(0,0,0,.65)",
+           collide ? 3.5 : meta.wifi ? 2.5 : 1.5);
       // avant du PAMI
       poly([local(b, front, 0), local(b, front - 30, hw * .6), local(b, front - 30, -hw * .6)], "rgba(0,0,0,.55)", null);
       // axe des roues
@@ -299,7 +341,7 @@
   const tbody = $("bodies");
   const rows = D.bodies.map((b, i) => {
     const tr = document.createElement("tr");
-    tr.innerHTML = `<td><span class="swatch" style="background:${palette[i]}"></span>${b.name}</td>
+    tr.innerHTML = `<td><span class="swatch" style="background:${palette[i]}"></span>${b.name}${b.wifi ? " 📶" : ""}</td>
       <td>${b.role}</td><td class="act"></td><td class="st"></td><td class="dist"></td>`;
     tbody.appendChild(tr);
     return tr;
@@ -386,7 +428,7 @@
 
   $("play").onclick = () => (playing ? pause() : play());
   slider.oninput = () => { pause(); simTime = frames[+slider.value][0]; setFrame(+slider.value); };
-  ["showLidar", "showTrails", "showTargets", "showObstacles"].forEach(id => $(id).onchange = draw);
+  ["showLidar", "showTrails", "showTargets", "showObstacles", "showPaths"].forEach(id => $(id).onchange = draw);
   $("showLogs").onchange = updateEvents;
   window.addEventListener("keydown", (e) => {
     if (e.code === "Space") { e.preventDefault(); playing ? pause() : play(); }

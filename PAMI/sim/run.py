@@ -10,6 +10,7 @@ Usage (depuis le dossier PAMI) :
     python sim/run.py --axle 0          # axe des roues par rapport au centre (mm,
                                         # + = avant, - = arriere ; defaut -85 : config.h)
     python sim/run.py --no-jetson       # sans Jetson (pas de Wi-Fi : capteurs seuls)
+    python sim/run.py --enemy-classic   # adversaire sans recherche de chemin
     python sim/run.py --no-open         # ne pas ouvrir le navigateur
 
 --size et --axle remplacent les valeurs de config.h (recompilation).
@@ -40,6 +41,7 @@ SOURCES = [
     PAMI / "lib" / "sensors" / "ObstacleSensor.cpp",
     PAMI / "lib" / "sensors" / "TofArray.cpp",
     PAMI / "lib" / "com" / "JetsonText.cpp",
+    PAMI / "lib" / "planner" / "GridPlanner.cpp",
     SIM / "src" / "sim_hw.cpp",
     SIM / "src" / "sim_world.cpp",
     SIM / "src" / "sim_main.cpp",
@@ -56,6 +58,7 @@ INCLUDES = [
     PAMI / "lib" / "com",
     PAMI / "lib" / "drive",
     PAMI / "lib" / "match",
+    PAMI / "lib" / "planner",
     PAMI / "lib" / "sensors",
     PAMI / "lib" / "strategy",
 ]

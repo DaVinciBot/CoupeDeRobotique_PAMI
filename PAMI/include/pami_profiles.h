@@ -68,8 +68,15 @@ constexpr uint16_t EXIT_MAX_MS = 7000;
 
 constexpr float STABLE_SLOT_X = 2900.0f - PAMI_AXLE_FROM_CENTER_MM;  // axe des roues
 
-// Trajets directs : aucun point de passage entre la sortie et la cible.
-// (Des points de passage peuvent être ajoutés ici : Waypoint{x, y, zone}.)
+// PAMI d'attaque 5 et 6 (côté intérieur des écuries) : dès la sortie, ils
+// partent vers le milieu de la table (point de passage, sans s'arrêter),
+// pour laisser les bords aux PAMI douve qui longent la table. Points choisis
+// à 14 cm des murailles de notre château.
+constexpr Waypoint ROUTE_PAMI5[] = {{2000.0f, 600.0f, Zone::OPEN}};
+constexpr Waypoint ROUTE_PAMI6[] = {{2000.0f, 1400.0f, Zone::OPEN}};
+
+// Les autres : trajet direct, aucun point de passage entre la sortie et la
+// cible. (Des points de passage peuvent être ajoutés ici : Waypoint{x, y, zone}.)
 // Rangement dans l'écurie : le PAMI dont la cible est la plus « en biais »
 // est côté intérieur (il tourne le plus, et le premier) ; celui qui va le
 // plus droit est contre le bord. Les trajets s'écartent en éventail sans se
@@ -78,14 +85,14 @@ constexpr PamiProfile PAMI_PROFILES[] = {
     // id  rôle       micropas cible  départ (x, y, theta)          décalage sortie   durée
     // écurie 0 : intérieur (y 250), milieu (150), bord (50)
     {5, Role::Attack, 8, 0, {STABLE_SLOT_X, 250.0f, table::FACING_ENEMY}, 0, INNER_SLOT_EXIT_MM,
-     EXIT_MAX_MS, nullptr, 0},  // -> zone 0 (la plus en biais)
+     EXIT_MAX_MS, ROUTE_PAMI5, countOf(ROUTE_PAMI5)},  // -> zone 0 (la plus en biais)
     {3, Role::Douve, 8, 1, {STABLE_SLOT_X, 150.0f, table::FACING_ENEMY}, 0, MIDDLE_SLOT_EXIT_MM,
      EXIT_MAX_MS, nullptr, 0},  // -> pont
     {1, Role::Douve, 8, 0, {STABLE_SLOT_X, 50.0f, table::FACING_ENEMY}, 0, EDGE_SLOT_EXIT_MM,
      EXIT_MAX_MS, nullptr, 0},  // -> douve 0 (presque tout droit), ex-"Normal"
     // écurie 1 : intérieur (y 1750), milieu (1850), bord (1950)
     {6, Role::Attack, 8, 1, {STABLE_SLOT_X, 1750.0f, table::FACING_ENEMY}, 0, INNER_SLOT_EXIT_MM,
-     EXIT_MAX_MS, nullptr, 0},  // -> zone 1 (la plus en biais)
+     EXIT_MAX_MS, ROUTE_PAMI6, countOf(ROUTE_PAMI6)},  // -> zone 1 (la plus en biais)
     {4, Role::Attack, 8, 2, {STABLE_SLOT_X, 1850.0f, table::FACING_ENEMY}, 0, MIDDLE_SLOT_EXIT_MM,
      EXIT_MAX_MS, nullptr, 0},  // -> zone 2
     {2, Role::Douve, 4, 2, {STABLE_SLOT_X, 1950.0f, table::FACING_ENEMY}, 0, EDGE_SLOT_EXIT_MM,
@@ -143,6 +150,9 @@ constexpr float OWN_ROUTE_CLEARANCE_MM = 150.0f;
 // Avec les positions adverses de la Jetson (Wi-Fi) : on sait qui est adverse,
 // la chasse commence dès l'arrivée dans la zone, jusqu'à cette distance.
 constexpr float ATTACK_REMOTE_RANGE_MM = 700.0f;
+// L'adversaire déjà visé reste la cible tant qu'un autre n'est pas plus
+// proche de cette distance (évite d'hésiter entre deux).
+constexpr float ATTACK_TARGET_STICKY_MM = 150.0f;
 constexpr uint32_t REMOTE_ENEMIES_MAX_AGE_MS = 300;  // au-delà : positions trop vieilles
 // Marge autour des obstacles fixes : un point vu à moins de cette distance
 // d'une carrière ou d'un rempart n'est pas pris pour un PAMI adverse
@@ -169,7 +179,31 @@ constexpr float PASS_THROUGH_MM = 100.0f;
 //     les voisins d'écurie se gênent davantage).
 constexpr float TRAVEL_SMOOTH_MAX_RAD = 1.05f;        // 60°
 constexpr float HUNT_SMOOTH_MAX_RAD = 0.52f;          // 30°
-constexpr float TRAVEL_REPLAN_SMOOTH_MAX_RAD = 0.0f;  // 0 = pivot
+constexpr float TRAVEL_REPLAN_SMOOTH_MAX_RAD = 0.0f;  // 0 = virage serré (ci-dessous)
+// Au-delà de ces angles : tourner EN ROULANT sur un arc de ce rayon (les
+// deux roues avancent : 15 cm > demi-entraxe), au lieu de s'arrêter pour
+// pivoter. Le pivot sur place reste face à un obstacle tout proche, près du
+// but (un virage de rayon fixe tournerait autour) et si l'arc touche la carte.
+// Simulation (36 matchs contre un adversaire classique), points par match :
+//   douve en roulant + attaque en pivot : 6,94 (19 douves, attaque dans 31 matchs)
+//   tout en pivot : 6,67 ; tout en roulant : 5,42 (la chasse vise mal)
+constexpr float TURN_RADIUS_MM = 150.0f;        // PAMI douve
+constexpr float ATTACK_TURN_RADIUS_MM = 0.0f;   // PAMI d'attaque : pivot
+// Recherche de chemin (PAMI avec Wi-Fi 6E, Jetson connectée) : chemin du
+// CENTRE du PAMI sur une grille de 5 cm, recalculé toutes les 250 ms.
+constexpr bool USE_PATH_PLANNING = true;
+// Chasse de l'attaque aussi par le calcul de chemin (sinon : poursuite directe).
+// Simulation, contre un adversaire sans calcul de chemin (--enemy-classic) :
+// 50/108 attaques validées, contre 48 en poursuite directe.
+constexpr bool PATH_PLANNING_HUNT = true;
+// Le centre reste à cette distance des murailles et des bords.
+constexpr float PLANNER_STATIC_CLEARANCE_MM = 80.0f;
+// Les centres restent à cette distance de celui d'un autre robot (sa
+// demi-taille + la nôtre, côte à côte : 95 ; bout à bout : 190 ; entre les deux)
+constexpr float PLANNER_ROBOT_RADIUS_MM = 170.0f;
+constexpr float PLANNER_SOFT_MARGIN_MM = 80.0f;  // marge évitée si possible
+// Les robots occupent aussi leurs positions prévues jusqu'à cet horizon.
+constexpr float PLANNER_HORIZON_S = 1.0f;
 // Douve : à l'approche, on ignore les capteurs (rempart, pierres autour des douves).
 constexpr float DOUVE_IGNORE_OBSTACLE_WITHIN_MM = 150.0f;
 

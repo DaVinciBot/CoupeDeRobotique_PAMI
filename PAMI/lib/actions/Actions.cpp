@@ -1,5 +1,8 @@
 #include "Actions.h"
 
+// Pose atteinte après un arc (longueur, rotation) partant de `from` (plus bas).
+static Pose afterArc(const Pose& from, float length, float rotation);
+
 // ------------------------------------------------------------------
 // Forward
 // ------------------------------------------------------------------
@@ -106,6 +109,25 @@ void GoTo::planLeg() {
         return;
     }
     float dTheta = wrapPi(headingTo(p, _target) - p.theta);
+    // Tourner en roulant (arc de rayon turnRadiusMm) plutôt que pivoter sur
+    // place : pas d'arrêt. Seulement si l'arc ne touche rien sur la carte et
+    // pas pour un contournement (obstacle juste devant : pivoter).
+    _arcTurning = false;
+    // (près de la cible, un virage de rayon fixe tournerait autour : pivoter)
+    if (!pivotNow && _opt.turnRadiusMm > 0.0f &&
+        distanceMm(p, _target) >= 2.0f * _opt.turnRadiusMm) {
+        float length = _opt.turnRadiusMm * fabsf(dTheta);
+        bool free = true;
+        for (int k = 1; k <= 6 && free && _opt.isPoseFree; ++k) {
+            free = _opt.isPoseFree(afterArc(p, length * k / 6, dTheta * k / 6));
+        }
+        if (free) {
+            _drive.arc(length, dTheta);
+            _arcTurning = true;
+            _phase = Phase::Turning;
+            return;
+        }
+    }
     _drive.turn(dTheta);
     _phase = Phase::Turning;
 }
@@ -175,7 +197,6 @@ void GoTo::checkRetarget() {
 
 // Arc de cercle qui part dans la direction actuelle et passe par la cible.
 // Renvoie false si la cible est trop sur le côté ou déjà atteinte.
-static Pose afterArc(const Pose& from, float length, float rotation);
 
 bool GoTo::steerToTarget(float maxSteerRad, bool checkMap) {
     Pose p = _drive.pose();
@@ -240,6 +261,28 @@ void GoTo::update() {
 
     switch (_phase) {
         case Phase::Turning:
+            if (_arcTurning) {
+                // Virage en roulant : il avance, donc on surveille devant
+                if (obstacleAhead()) {
+                    _drive.stop();
+                    _arcTurning = false;
+                    _pivotNext = true;
+                    _replanPending = true;
+                    break;
+                }
+                // Presque face à la cible : enchaîner sans s'arrêter
+                Pose p = _drive.pose();
+                if (fabsf(wrapPi(headingTo(p, _target) - p.theta)) < 0.15f || !_drive.isBusy()) {
+                    _arcTurning = false;
+                    _prevFrontMm = 0xFFFF;
+                    if (steerToTarget(0.6f, true)) {
+                        _phase = Phase::Driving;
+                    } else if (!_drive.isBusy()) {
+                        planLeg();
+                    }
+                }
+                break;
+            }
             if (!_drive.isBusy()) {
                 float d = distanceMm(_drive.pose(), _target);
                 _drive.forward(max(0.0f, d - _opt.stopWithinMm));
@@ -288,16 +331,29 @@ void GoTo::update() {
                 _closingMmS < _opt.followClosingMmS) {
                 obstacle = false;
             }
+            // Où va l'obstacle ? S'il traverse et sort bientôt du couloir, on
+            // l'attend (sans contourner), et on repart dès que sa position
+            // prévue est dehors, sans attendre qu'il soit complètement passé.
+            trackObstacle();
+            bool clearSoon = false;
+            bool crossing = obstacle && crossingObstacle(clearSoon);
+            if (crossing && clearSoon && _sensor != nullptr && _sensor->frontMinMm() >= 100) {
+                obstacle = false;  // (pas s'il est tout près : la carrosserie le toucherait)
+            }
             if (_opt.pauseOnObstacle) {
                 if (obstacle && !_drive.isPaused()) _drive.pause();
                 if (!obstacle && _drive.isPaused()) _drive.resume();
 
                 // Bloqué trop longtemps par un obstacle qui ne s'éloigne pas :
                 // contourner. Un obstacle qui s'éloigne est un PAMI qu'on suit :
-                // on attend qu'il avance.
+                // on attend qu'il avance. Un obstacle qui traverse : on attend
+                // qu'il passe.
                 uint16_t front = _sensor != nullptr ? _sensor->frontMinMm() : 0xFFFF;
                 if (!obstacle) {
                     _blockedSinceMs = 0;
+                } else if (crossing) {
+                    _blockedSinceMs = millis();  // il passe : ne pas contourner
+                    _blockedFrontMm = front;
                 } else if (_blockedSinceMs == 0) {
                     _blockedSinceMs = millis();
                     _blockedFrontMm = front;
@@ -421,8 +477,15 @@ bool GoTo::startBypass() {
     const float c = cosf(p.theta), s = sinf(p.theta);
     const float clearances[2] = {_opt.bypassClearanceMm, _opt.bypassClearanceMm * 0.4f};
     const float beyonds[2] = {_opt.bypassBeyondMm, _opt.bypassBeyondMm * 0.6f};
+    // Côté : à droite d'abord ; mais un obstacle qui traverse lentement se
+    // contourne par derrière (du côté d'où il vient), pas devant lui.
+    float first = -1.0f;
+    if (_opt.trackMotion && _obsValid) {
+        const float vLat = -s * _obsVx + c * _obsVy;
+        if (fabsf(vLat) >= _opt.crossMinSpeedMmS) first = vLat > 0 ? -1.0f : 1.0f;
+    }
     for (int variant = 0; variant < 4; ++variant)
-    for (float side : {-1.0f, 1.0f}) {  // droite d'abord (y < 0 = droite)
+    for (float side : {first, -first}) {  // y < 0 = droite
         const float ahead = _opt.sensorOffsetMm + front + beyonds[variant / 2];
         const float offset = _opt.halfWidthMm + clearances[variant % 2];
         float lateral = side < 0 ? yMin - offset : yMax + offset;
@@ -578,6 +641,73 @@ bool GoTo::stalled() {
     }
     _stallRefSet = false;  // nouvelle référence à la prochaine trame
     return compared >= 2 && same == compared;
+}
+
+// Suivi de l'obstacle devant : à chaque trame des capteurs, son point le plus
+// proche (hors obstacles connus) placé sur la table ; s'il est à moins de
+// 12 cm du précédent, c'est le même objet : sa vitesse est mise à jour.
+void GoTo::trackObstacle() {
+    if (!_opt.trackMotion || _sensor == nullptr || !_sensor->healthy()) return;
+    uint32_t frame = _sensor->frames();
+    if (frame == _obsFrame) return;
+    _obsFrame = frame;
+
+    ObstaclePoint pts[ObstacleSensor::MAX_POINTS] = {};
+    _sensor->copyPoints(pts);
+    const Pose p = _drive.pose();
+    float best = 1e9f, bx = 0, by = 0;
+    for (const ObstaclePoint& lp : pts) {
+        if (!lp.valid || !lp.confirmed || fabsf(lp.y) > 250.0f) continue;
+        if (_opt.isKnownObstacle && _opt.isKnownObstacle(p, lp.x, lp.y)) continue;
+        float d = lp.x * lp.x + lp.y * lp.y;
+        if (d < best) {
+            best = d;
+            bx = lp.x;
+            by = lp.y;
+        }
+    }
+    uint32_t now = millis();
+    if (best > 1e8f) {
+        if (now - _obsMs > 300) _obsValid = false;
+        return;
+    }
+    const float x = bx + _opt.sensorOffsetMm, c = cosf(p.theta), s = sinf(p.theta);
+    const float tx = p.x + c * x - s * by, ty = p.y + s * x + c * by;
+    float dt = (now - _obsMs) / 1000.0f;
+    if (_obsValid && dt > 0.01f && dt < 0.3f && hypotf(tx - _obsX, ty - _obsY) < 120.0f) {
+        _obsVx = 0.6f * _obsVx + 0.4f * (tx - _obsX) / dt;
+        _obsVy = 0.6f * _obsVy + 0.4f * (ty - _obsY) / dt;
+    } else {
+        _obsVx = _obsVy = 0.0f;  // nouvel objet : vitesse inconnue
+    }
+    _obsX = tx;
+    _obsY = ty;
+    _obsMs = now;
+    _obsValid = true;
+}
+
+bool GoTo::crossingObstacle(bool& clearSoon) const {
+    clearSoon = false;
+    if (!_opt.trackMotion || !_obsValid || _sensor == nullptr) return false;
+    const Pose p = _drive.pose();
+    const float c = cosf(p.theta), s = sinf(p.theta);
+    // Repère du PAMI : latéral (+ à gauche) de la position et de la vitesse
+    const float lat = -s * (_obsX - p.x) + c * (_obsY - p.y);
+    const float vLat = -s * _obsVx + c * _obsVy;
+    if (fabsf(vLat) < _opt.crossMinSpeedMmS) return false;
+    // Il sort du couloir du côté où il va : distance qu'il lui reste
+    const float edge = _sensor->corridorHalfWidth() + _opt.obstacleHalfMm;
+    const float dir = vLat > 0 ? 1.0f : -1.0f;
+    const float remaining = edge - lat * dir;
+    if (remaining <= 0.0f) {
+        clearSoon = true;
+        return true;
+    }
+    const float tClear = remaining / fabsf(vLat);
+    if (tClear > _opt.crossWaitMaxS) return false;  // trop lent : contourner
+    // Position prévue dans anticipateS : déjà hors du couloir -> repartir
+    clearSoon = remaining - fabsf(vLat) * _opt.anticipateS <= 0.0f;
+    return true;
 }
 
 // Pose atteinte après un arc (longueur, rotation) partant de `from`.
@@ -742,6 +872,221 @@ void KeepDistance::update() {
 void KeepDistance::stop() {
     _drive.stop();
     _finished = true;
+}
+
+// ------------------------------------------------------------------
+// FollowPath
+// ------------------------------------------------------------------
+void FollowPath::start() {
+    _startMs = millis();
+    _lastGoalMs = 0;
+    _lastSteerMs = 0;
+    _replanNow = true;
+    _pathCount = 0;
+    _sensed = false;
+    _phase = _opt.waitForGoal && _opt.goalProvider ? Phase::Waiting : Phase::Following;
+    if (_phase == Phase::Waiting) Serial.println("[Chemin] attente d'un but");
+}
+
+Pose FollowPath::center() const {
+    Pose p = _drive.pose();
+    return {p.x + _opt.centerAheadMm * cosf(p.theta), p.y + _opt.centerAheadMm * sinf(p.theta),
+            p.theta};
+}
+
+// Obstacle devant vu par les capteurs, que le filtre ne reconnaît pas : il
+// devient un obstacle pour le calcul du chemin.
+bool FollowPath::blockedBySensors(const Pose& axle) {
+    if (_sensor == nullptr || !_sensor->healthy() || !_sensor->obstacle()) return false;
+    if (!unknownObstacleAhead(*_sensor, axle, _opt.isIgnored)) return false;
+    ObstaclePoint pts[ObstacleSensor::MAX_POINTS] = {};
+    _sensor->copyPoints(pts);
+    float best = 1e9f;
+    const float c = cosf(axle.theta), s = sinf(axle.theta);
+    for (const ObstaclePoint& lp : pts) {
+        if (!lp.valid || !lp.confirmed) continue;
+        if (_opt.isIgnored && _opt.isIgnored(axle, lp.x, lp.y)) continue;
+        float d = lp.x * lp.x + lp.y * lp.y;
+        if (d >= best) continue;
+        best = d;
+        // le point vu est une face : le robot est un peu derrière
+        float x = lp.x + _opt.sensorAheadMm + 60.0f;
+        _sensedX = axle.x + c * x - s * lp.y;
+        _sensedY = axle.y + s * x + c * lp.y;
+    }
+    if (best < 1e8f) {
+        if (!_sensed || millis() - _sensedMs > 300) _replanNow = true;
+        _sensed = true;
+        _sensedMs = millis();
+    }
+    return true;
+}
+
+void FollowPath::replan(const Pose& c) {
+    _lastPlanMs = millis();
+    _replanNow = false;
+    _planner.clearObstacles();
+    if (_opt.obstacles) _opt.obstacles(_planner, _goal);
+    if (_sensed && millis() - _sensedMs <= _opt.sensedObstacleMs) {
+        _planner.addObstacle({_sensedX, _sensedY, 0.0f, 0.0f, _opt.sensedObstacleRadiusMm});
+    }
+    int n = _planner.plan({c.x, c.y}, {_goal.x, _goal.y});
+    if (n > 0) {
+        _pathCount = n;
+        for (int i = 0; i < n; ++i) _path[i] = _planner.waypoints()[i];
+    } else {  // pas de chemin : tout droit vers le but (les capteurs veillent)
+        _pathCount = 1;
+        _path[0] = {_goal.x, _goal.y};
+    }
+    if (_opt.onPath) _opt.onPath(_path, _pathCount);
+}
+
+// Point visé : le premier point du chemin pas encore atteint.
+bool FollowPath::lookahead(const Pose& c, GridPlanner::Point& out) const {
+    for (int k = 0; k < _pathCount; ++k) {
+        if (k == _pathCount - 1 || hypotf(_path[k].x - c.x, _path[k].y - c.y) > _opt.lookaheadMm / 3) {
+            out = _path[k];
+            return true;
+        }
+    }
+    return false;
+}
+
+void FollowPath::arrive() {
+    _drive.stop();
+    Pose p = _drive.pose();
+    if (_opt.finalHeading) {
+        _drive.turn(wrapPi(_goal.theta - p.theta));
+        _phase = Phase::FinalTurn;
+        return;
+    }
+    if (_opt.faceGoal) {
+        Pose c = center();
+        float alpha = wrapPi(atan2f(_goal.y - c.y, _goal.x - c.x) - p.theta);
+        if (fabsf(alpha) > 0.05f) {
+            _drive.turn(alpha);
+            _phase = Phase::FinalTurn;
+            return;
+        }
+    }
+    _phase = Phase::Done;
+}
+
+void FollowPath::update() {
+    if (_phase == Phase::Done) return;
+    uint32_t now = millis();
+    if (_opt.timeoutMs > 0 && now - _startMs > _opt.timeoutMs) {
+        Serial.println("[Chemin] timeout");
+        stop();
+        return;
+    }
+    Pose c = center();
+
+    // But qui bouge : relu régulièrement
+    if (_opt.goalProvider && now - _lastGoalMs >= _opt.replanMs) {
+        _lastGoalMs = now;
+        Pose g;
+        if (_opt.goalProvider(c, g)) {
+            _goal = g;
+            if (_phase == Phase::Waiting) {
+                Serial.printf("[Chemin] but (%.0f, %.0f)\n", g.x, g.y);
+                _phase = Phase::Following;
+                _replanNow = true;
+            }
+        }
+    }
+    if (_phase == Phase::Waiting) return;
+    if (_phase == Phase::Pivot || _phase == Phase::FinalTurn) {
+        if (_drive.isBusy()) return;
+        if (_phase == Phase::FinalTurn) {
+            _phase = Phase::Done;
+            return;
+        }
+        _phase = Phase::Following;
+        _lastSteerMs = 0;
+    }
+
+    if (hypotf(_goal.x - c.x, _goal.y - c.y) <= _opt.stopWithinMm) {
+        Serial.println("[Chemin] but atteint");
+        arrive();
+        return;
+    }
+    const Pose axle = _drive.pose();
+    bool blocked = blockedBySensors(axle);
+    if (blocked && _drive.isBusy() && !_drive.isPaused()) _drive.stop();
+    if (_replanNow || now - _lastPlanMs >= _opt.replanMs) replan(c);
+    if (now - _lastSteerMs < _opt.steerMs) return;
+    _lastSteerMs = now;
+
+    GridPlanner::Point L;
+    if (!lookahead(c, L)) L = {_goal.x, _goal.y};
+    float dx = L.x - c.x, dy = L.y - c.y;
+    float dist = hypotf(dx, dy);
+    if (dist < 1.0f) return;
+    float alpha = wrapPi(atan2f(dy, dx) - axle.theta);
+    // Obstacle devant et chemin qui tourne : pivoter (avancer le toucherait)
+    if (blocked && fabsf(alpha) > 0.35f) {
+        _drive.turn(alpha);
+        _phase = Phase::Pivot;
+        return;
+    }
+    if (blocked) return;  // le nouveau chemin passe encore devant : attendre
+    // Trop sur le côté : tourner en roulant (arc serré), consigne renouvelée
+    // à chaque pas, au lieu de s'arrêter pour pivoter
+    if (fabsf(alpha) > _opt.pivotAboveRad) {
+        // Près du point visé, un virage de rayon fixe tournerait autour sans
+        // jamais l'atteindre : pivoter
+        if (_opt.turnRadiusMm <= 0.0f || dist < 2.0f * _opt.turnRadiusMm) {
+            _drive.turn(alpha);
+            _phase = Phase::Pivot;
+            return;
+        }
+        float rot = fmaxf(-0.6f, fminf(0.6f, alpha));
+        if (!arcFree(axle, _opt.turnRadiusMm * fabsf(rot), rot)) {
+            _drive.turn(alpha);  // pas la place (muraille, bord) : pivoter
+            _phase = Phase::Pivot;
+            return;
+        }
+        _drive.arc(_opt.turnRadiusMm * fabsf(rot), rot);
+        return;
+    }
+
+    // L'axe vise le point tel que le centre arrive sur L ; arc tangent au cap
+    float ax = L.x - _opt.centerAheadMm * dx / dist, ay = L.y - _opt.centerAheadMm * dy / dist;
+    float cs = cosf(axle.theta), sn = sinf(axle.theta);
+    float ahead = cs * (ax - axle.x) + sn * (ay - axle.y);
+    float left = -sn * (ax - axle.x) + cs * (ay - axle.y);
+    float a2 = atan2f(left, ahead), d2 = hypotf(ahead, left);
+    if (d2 < 5.0f) return;
+    if (fabsf(a2) > 1.3f) {
+        float rot = fmaxf(-0.6f, fminf(0.6f, a2));
+        if (_opt.turnRadiusMm > 0.0f && d2 >= 2.0f * _opt.turnRadiusMm &&
+            arcFree(axle, _opt.turnRadiusMm * fabsf(rot), rot)) {
+            _drive.arc(_opt.turnRadiusMm * fabsf(rot), rot);
+        } else {
+            _drive.turn(a2);
+            _phase = Phase::Pivot;
+        }
+        return;
+    }
+    float remaining = hypotf(_goal.x - c.x, _goal.y - c.y) - _opt.stopWithinMm;
+    float step = fminf(fminf(d2, _opt.maxStepMm), fmaxf(remaining, 5.0f));
+    float part = step / d2;
+    float arcLen = fabsf(a2) < 1e-3f ? d2 : d2 * a2 / sinf(a2);
+    _drive.arc(arcLen * part, 2.0f * a2 * part);
+}
+
+bool FollowPath::arcFree(const Pose& from, float length, float rotation) const {
+    if (!_opt.isPoseFree) return true;
+    for (int k = 1; k <= 4; ++k) {
+        if (!_opt.isPoseFree(afterArc(from, length * k / 4, rotation * k / 4))) return false;
+    }
+    return true;
+}
+
+void FollowPath::stop() {
+    _drive.stop();
+    _phase = Phase::Done;
 }
 
 // ------------------------------------------------------------------

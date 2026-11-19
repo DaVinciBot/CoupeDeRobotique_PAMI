@@ -481,6 +481,22 @@ void SimWorld::record(uint32_t tMs) {
         f.values.insert(f.values.end(), values, values + 6);
     }
     _frames.push_back(f);
+
+    // Nouveau chemin calculé depuis la dernière image : le garder
+    if (_pathVersions.size() != _pamis.size()) _pathVersions.assign(_pamis.size(), 0);
+    for (size_t i = 0; i < _pamis.size(); ++i) {
+        const App& a = *_pamis[i].app;
+        if (a.lastPath.version == _pathVersions[i]) continue;
+        _pathVersions[i] = a.lastPath.version;
+        PathSnap ps;
+        ps.t = tMs;
+        ps.body = (int)i;
+        for (uint8_t k = 0; k < a.lastPath.count; ++k) {
+            ps.xy.push_back(a.lastPath.x[k]);
+            ps.xy.push_back(a.lastPath.y[k]);
+        }
+        _paths.push_back(ps);
+    }
 }
 
 bool SimWorld::writeOutput(const char* path, const char* name) const {
@@ -545,7 +561,9 @@ bool SimWorld::writeOutput(const char* path, const char* name) const {
             Pose q = table::forTeam({prof.route[k].x, prof.route[k].y, 0.0f}, p.team);
             fprintf(f, ",[%.0f,%.0f]", q.x, q.y);
         }
-        fprintf(f, "]}");
+        // Wi-Fi 6E avec la Jetson : position des robots connue, vrai chemin
+        bool wifi = _opt.jetson && comTransportFor(p.app->role) != ComTransport::None;
+        fprintf(f, "], \"wifi\": %s}", wifi ? "true" : "false");
         sep = ",\n";
     }
     fprintf(f, "\n],\n");
@@ -566,6 +584,16 @@ bool SimWorld::writeOutput(const char* path, const char* name) const {
                     fr.values[v + 2], fr.values[v + 3], fr.values[v + 4], fr.values[v + 5]);
         }
         fprintf(f, "]%s\n", k + 1 < _frames.size() ? "," : "");
+    }
+    fprintf(f, "],\n");
+
+    // Chemins calculés (PAMI avec Wi-Fi) : [t, n° du PAMI, [x, y, x, y...]]
+    fprintf(f, "\"paths\": [\n");
+    for (size_t k = 0; k < _paths.size(); ++k) {
+        const PathSnap& ps = _paths[k];
+        fprintf(f, "[%u,%d,[", ps.t, ps.body);
+        for (size_t v = 0; v < ps.xy.size(); ++v) fprintf(f, "%s%.0f", v ? "," : "", ps.xy[v]);
+        fprintf(f, "]]%s\n", k + 1 < _paths.size() ? "," : "");
     }
     fprintf(f, "],\n");
 

@@ -47,6 +47,13 @@ struct SimPami {
     float maxDriftMm = 0.0f;  // plus grand écart odométrie / vraie position
 };
 
+// Chemin calculé par un PAMI (recherche de chemin), à un instant
+struct PathSnap {
+    uint32_t t;
+    int body;
+    std::vector<float> xy;
+};
+
 struct Frame {
     uint32_t t;
     // par PAMI : x, y, theta, drapeaux, action, servo
@@ -95,4 +102,6 @@ class SimWorld {
     std::set<int> _leftStableEarly;
     std::vector<std::string> _actionNames;
     std::vector<Frame> _frames;
+    std::vector<PathSnap> _paths;
+    std::vector<uint32_t> _pathVersions;
 };

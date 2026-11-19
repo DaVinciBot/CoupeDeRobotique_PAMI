@@ -74,12 +74,30 @@ GoTo::TargetProvider nearestEnemyCandidate(App& a) {
         if (a.enemies.fresh(REMOTE_ENEMIES_MAX_AGE_MS)) {
             float best = ATTACK_REMOTE_RANGE_MM;
             bool found = false;
+            // Cible collante : l'adversaire déjà visé (le plus proche de sa
+            // dernière position) garde l'avantage de ATTACK_TARGET_STICKY_MM,
+            // sinon le PAMI hésite entre deux adversaires à égale distance et
+            // pivote d'un côté puis de l'autre sans avancer.
+            int current = -1;
+            if (a.hunt.valid && millis() - a.hunt.timeMs < 1000) {
+                float bestMatch = 150.0f;
+                for (uint8_t i = 0; i < a.enemies.count; ++i) {
+                    float m = hypotf(a.enemies.x[i] - a.hunt.x, a.enemies.y[i] - a.hunt.y);
+                    if (m < bestMatch) {
+                        bestMatch = m;
+                        current = i;
+                    }
+                }
+            }
+            int chosen = -1;
             for (uint8_t i = 0; i < a.enemies.count; ++i) {
                 float dx = a.enemies.x[i] - robot.x, dy = a.enemies.y[i] - robot.y;
-                float d = hypotf(dx, dy);
-                if (d < best && d > 1.0f &&
+                float d = hypotf(dx, dy) - (i == current ? ATTACK_TARGET_STICKY_MM : 0.0f);
+                if (d < best && hypotf(dx, dy) > 1.0f &&
                     !allyInTheWay(a, robot, a.enemies.x[i], a.enemies.y[i])) {
                     best = d;
+                    chosen = i;
+                    d = hypotf(dx, dy);
                     // viser sa surface, pas son centre (stopWithin compte depuis
                     // la surface). On ne connaît pas son orientation : on prend
                     // le pire cas, son coin (le plus loin de son centre, donc le
@@ -90,6 +108,12 @@ GoTo::TargetProvider nearestEnemyCandidate(App& a) {
                     out = {a.enemies.x[i] - dx * back, a.enemies.y[i] - dy * back, 0.0f};
                     found = true;
                 }
+            }
+            a.hunt.valid = found;
+            if (found) {
+                a.hunt.x = a.enemies.x[chosen];
+                a.hunt.y = a.enemies.y[chosen];
+                a.hunt.timeMs = millis();
             }
             return found;
         }
@@ -201,11 +225,13 @@ GoTo::Options travelOptions(const App& a) {
     o.smooth = true;
     o.smoothMaxRad = TRAVEL_SMOOTH_MAX_RAD;
     o.replanSmoothMaxRad = TRAVEL_REPLAN_SMOOTH_MAX_RAD;
+    o.turnRadiusMm = a.role == Role::Attack ? ATTACK_TURN_RADIUS_MM : TURN_RADIUS_MM;
     o.isPoseFree = [&a](const Pose& p) { return isPoseFree(p, &a); };
     o.isKnownObstacle = isKnownObstacle;
     o.follow = true;
     o.bypass = true;
     o.detectStall = true;
+    o.trackMotion = true;
     o.halfWidthMm = PAMI_WIDTH_MM / 2;
     o.sensorOffsetMm = SENSOR_OFFSET_X_MM;
     return o;
@@ -241,6 +267,69 @@ void addExitAndRoute(App& a, Strategy& s) {
     }
 }
 
+// ------------------------------------------------------------------
+// Recherche de chemin (PAMI avec Wi-Fi 6E)
+// ------------------------------------------------------------------
+GoTo::Options huntOptions(App& a);
+void addAttackHold(App& a, Strategy& s);
+
+// Le PAMI a le module Wi-Fi 6E : il peut connaître la position des autres
+// robots (Jetson) et calculer un vrai chemin.
+bool usesPathPlanning(const App& a) {
+    return USE_PATH_PLANNING && a.pathPlanning && comTransportFor(a.role) != ComTransport::None;
+}
+
+Pose axleOf(const Pose& center) {
+    return {center.x - CENTER_AHEAD_OF_AXLE_MM * cosf(center.theta),
+            center.y - CENTER_AHEAD_OF_AXLE_MM * sinf(center.theta), center.theta};
+}
+
+// Carte des obstacles fixes pour le centre du PAMI (une seule fois).
+void initPlanner(App& a) {
+    if (a.planner.ready()) return;
+    a.planner.init([](float x, float y) {
+        return !table::nearEdge(x, y, PLANNER_STATIC_CLEARANCE_MM) &&
+               !table::isFixedObstacle(x, y, PLANNER_STATIC_CLEARANCE_MM);
+    });
+    a.planner.setHorizon(PLANNER_HORIZON_S);
+    a.planner.setSoftMargin(PLANNER_SOFT_MARGIN_MM);
+}
+
+// Robots à éviter : tous ceux que voit la Jetson (adversaires et coéquipiers),
+// avec leur vitesse, sauf celui qui est le but (attaque).
+void addRobotObstacles(const App& a, GridPlanner& planner, const Pose& goal) {
+    for (const RemoteEnemies* r : {&a.enemies, &a.allies}) {
+        if (!r->fresh(REMOTE_ENEMIES_MAX_AGE_MS)) continue;
+        for (uint8_t i = 0; i < r->count; ++i) {
+            if (hypotf(r->x[i] - goal.x, r->y[i] - goal.y) <= ENEMY_CORNER_FROM_CENTER_MM + 60.0f) {
+                continue;  // la cible elle-même
+            }
+            planner.addObstacle({r->x[i], r->y[i], r->vx[i], r->vy[i], PLANNER_ROBOT_RADIUS_MM});
+        }
+    }
+}
+
+FollowPath::Options pathOptions(App& a) {
+    FollowPath::Options o;
+    o.centerAheadMm = CENTER_AHEAD_OF_AXLE_MM;
+    o.sensorAheadMm = SENSOR_OFFSET_X_MM;
+    o.stopWithinMm = 30.0f;
+    o.turnRadiusMm = TURN_RADIUS_MM;
+    o.isPoseFree = [&a](const Pose& p) { return isPoseFree(p, &a); };
+    o.obstacles = [&a](GridPlanner& planner, const Pose& goal) {
+        addRobotObstacles(a, planner, goal);
+    };
+    o.onPath = [&a](const GridPlanner::Point* pts, int count) {
+        a.lastPath.count = (uint8_t)count;
+        for (int i = 0; i < count; ++i) {
+            a.lastPath.x[i] = pts[i].x;
+            a.lastPath.y[i] = pts[i].y;
+        }
+        a.lastPath.version++;
+    };
+    return o;
+}
+
 void addDouve(App& a, Strategy& s) {
     uint8_t idx = a.profile->targetIndex % table::ENEMY_DOUVE_COUNT;
     addExitAndRoute(a, s);
@@ -255,19 +344,51 @@ void addAttack(App& a, Strategy& s) {
     uint8_t idx = a.profile->targetIndex % table::ATTACK_ZONE_COUNT;
     Pose zone = table::forTeam(table::ATTACK_ZONES[idx], a.team);
 
-    // 1) Aller à sa zone, tourné vers l'adversaire, avec l'évitement normal.
-    //    On ne chasse pas en route : on prendrait pour cible le coéquipier
-    //    sorti juste avant de la même écurie.
+    // 1) Aller à sa zone, tourné vers l'adversaire. On ne chasse pas en route :
+    //    on prendrait pour cible le coéquipier sorti juste avant de la même
+    //    écurie.
+    // 2) Attendre qu'un PAMI adverse passe à portée, puis le rejoindre jusqu'à
+    //    ATTACK_APPROACH_GAP_MM de sa surface. L'obstacle, c'est la cible : on
+    //    ne s'arrête que devant ce qui n'est pas un adversaire (un coéquipier,
+    //    si la Jetson donne les positions).
     addExitAndRoute(a, s);
-    GoTo::Options toZone = travelOptions(a);
-    toZone.finalHeading = true;
-    toZone.stopWithinMm = CENTER_AHEAD_OF_AXLE_MM;
-    s.add(new GoTo(a.drive, a.sensorsOrNull(), zone, toZone));
+    if (usesPathPlanning(a)) {
+        // Wi-Fi 6E : vrai chemin, recalculé avec la position prévue de tous
+        // les robots vus par la Jetson
+        initPlanner(a);
+        FollowPath::Options toZone = pathOptions(a);
+        toZone.finalHeading = true;
+        toZone.isIgnored = isKnownObstacle;
+        toZone.timeoutMs = GOTO_TIMEOUT_MS;
+        toZone.turnRadiusMm = ATTACK_TURN_RADIUS_MM;
+        s.add(new FollowPath(a.drive, a.sensorsOrNull(), a.planner, zone, toZone));
 
-    // 2) Attendre qu'un PAMI adverse passe à portée, puis le rejoindre en
-    //    courbe (cap corrigé en roulant) jusqu'à ATTACK_APPROACH_GAP_MM de sa
-    //    face. L'obstacle, c'est la cible : on ne s'arrête que devant ce qui
-    //    n'est pas un adversaire (un coéquipier, si la Jetson donne les positions).
+        if (!PATH_PLANNING_HUNT) {  // cible proche et qui bouge : poursuite directe
+            s.add(new GoTo(a.drive, a.sensorsOrNull(), zone, huntOptions(a)));
+            addAttackHold(a, s);
+            return;
+        }
+        FollowPath::Options hunt = pathOptions(a);
+        hunt.turnRadiusMm = 0.0f;  // cible proche : pivot précis (meilleur en simulation)
+        hunt.goalProvider = [&a](const Pose& center, Pose& goal) {
+            return nearestEnemyCandidate(a)(axleOf(center), goal);
+        };
+        hunt.waitForGoal = true;
+        hunt.faceGoal = true;
+        hunt.stopWithinMm = FRONT_AHEAD_OF_AXLE_MM - CENTER_AHEAD_OF_AXLE_MM + ATTACK_APPROACH_GAP_MM;
+        hunt.isIgnored = isEnemyOrKnown(a);
+        s.add(new FollowPath(a.drive, a.sensorsOrNull(), a.planner, zone, hunt));
+    } else {
+        GoTo::Options toZone = travelOptions(a);
+        toZone.finalHeading = true;
+        toZone.stopWithinMm = CENTER_AHEAD_OF_AXLE_MM;
+        s.add(new GoTo(a.drive, a.sensorsOrNull(), zone, toZone));
+        s.add(new GoTo(a.drive, a.sensorsOrNull(), zone, huntOptions(a)));
+    }
+    addAttackHold(a, s);
+}
+
+GoTo::Options huntOptions(App& a) {
     GoTo::Options hunt;
     hunt.timeoutMs = 0;  // jusqu'à la fin du match
     hunt.isKnownObstacle = isEnemyOrKnown(a);
@@ -276,13 +397,16 @@ void addAttack(App& a, Strategy& s) {
     hunt.smooth = true;
     hunt.smoothMaxRad = HUNT_SMOOTH_MAX_RAD;
     hunt.replanSmoothMaxRad = HUNT_SMOOTH_MAX_RAD;
+    hunt.turnRadiusMm = 0.0f;  // cible proche : pivot précis (meilleur en simulation)
     hunt.isPoseFree = [&a](const Pose& p) { return isPoseFree(p, &a); };
     hunt.provider = nearestEnemyCandidate(a);
     hunt.waitForTarget = true;
     hunt.retargetPeriodMs = 200;
     hunt.retargetMinMm = 20.0f;
-    s.add(new GoTo(a.drive, a.sensorsOrNull(), zone, hunt));
+    return hunt;
+}
 
+void addAttackHold(App& a, Strategy& s) {
     // 3) Déployer l'actionneur, puis se tenir à ATTACK_HOLD_GAP_MM de la face
     //    adverse jusqu'à la fin du match : l'actionneur touche, la carrosserie
     //    non (règlement). Si l'adversaire bouge, on le suit.

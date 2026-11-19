@@ -5,6 +5,7 @@
 #include <Arduino.h>
 
 #include "DiffDrive.h"
+#include "GridPlanner.h"
 #include "TofArray.h"
 #include "MatchClock.h"
 #include "ServoPwm.h"
@@ -29,11 +30,13 @@ enum class MatchState : uint8_t {
 };
 
 // Positions reçues en Wi-Fi (caméra de la Jetson) : PAMI adverses, ou nos
-// autres robots (coéquipiers).
+// autres robots (coéquipiers). La vitesse de chacun est estimée d'une
+// réception à l'autre (remote.cpp) : sert à prévoir où il va.
 struct RemoteEnemies {
     static constexpr uint8_t MAX = 6;
     uint8_t count = 0;
     float x[MAX] = {}, y[MAX] = {};
+    float vx[MAX] = {}, vy[MAX] = {};  // mm/s (0 si inconnue)
     uint32_t timeMs = 0;  // millis() à la réception (0 = jamais reçu)
     bool fresh(uint32_t maxAgeMs) const { return timeMs != 0 && millis() - timeMs <= maxAgeMs; }
 };
@@ -57,6 +60,23 @@ struct App {
     RemoteEnemies allies;  // nos autres robots (PAMI, robot principal), sans nous
     bool remoteTeamSet = false;  // couleur imposée par l'hôte
     Team remoteTeam = Team::Blue;
+
+    // Attaque : adversaire visé (position à la dernière réception)
+    struct {
+        bool valid = false;
+        float x = 0, y = 0;
+        uint32_t timeMs = 0;
+    } hunt;
+
+    // Recherche de chemin (PAMI avec Wi-Fi 6E) et dernier chemin calculé
+    // (lu par le simulateur pour l'afficher)
+    GridPlanner planner;
+    bool pathPlanning = true;  // false : jamais (simulateur, --enemy-classic)
+    struct {
+        uint8_t count = 0;
+        float x[GridPlanner::MAX_WAYPOINTS] = {}, y[GridPlanner::MAX_WAYPOINTS] = {};
+        uint32_t version = 0;
+    } lastPath;
 
     const ObstacleSensor* sensorsOrNull() const { return sensorsEnabled ? &tof : nullptr; }
 };

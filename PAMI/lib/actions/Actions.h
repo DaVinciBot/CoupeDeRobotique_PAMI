@@ -6,6 +6,7 @@
 
 #include "Action.h"
 #include "DiffDrive.h"
+#include "GridPlanner.h"
 #include "ObstacleSensor.h"
 #include "MatchClock.h"
 #include "ServoPwm.h"
@@ -190,6 +191,10 @@ class GoTo : public Action {
         // Idem pour les reprises (après esquive, contournement, attente).
         // 0 = toujours pivoter.
         float replanSmoothMaxRad = 0.0f;
+        // Au-delà : tourner en roulant, sur un arc de ce rayon (0 = pivoter
+        // sur place). Le pivot reste pour un contournement (obstacle devant)
+        // ou si l'arc touche la carte.
+        float turnRadiusMm = 0.0f;
         // Point de passage : terminé à cette distance, SANS freiner ; le
         // GoTo suivant enchaîne directement vers le point d'après.
         float passThroughMm = 0.0f;
@@ -226,6 +231,18 @@ class GoTo : public Action {
         bool detectStall = false;
         float stallTravelMm = 100.0f;
         float stallToleranceMm = 15.0f;
+
+        // Mouvement de l'obstacle : suivi d'une trame à l'autre (position
+        // sur la table, vitesse). Un obstacle qui TRAVERSE notre couloir et
+        // en sort dans moins de crossWaitMaxS secondes : on l'attend (et on
+        // repart dès que sa position prévue dans anticipateS est hors du
+        // couloir) au lieu de le contourner. S'il met plus longtemps : on
+        // le contourne par derrière (du côté d'où il vient).
+        bool trackMotion = false;
+        float crossMinSpeedMmS = 50.0f;
+        float crossWaitMaxS = 1.5f;
+        float anticipateS = 0.3f;
+        float obstacleHalfMm = 110.0f;  // demi-taille d'un PAMI (pire cas)
     };
 
     GoTo(DiffDrive& drive, const ObstacleSensor* sensor, const Pose& target)
@@ -271,6 +288,10 @@ class GoTo : public Action {
     uint32_t randomBetween(uint32_t lo, uint32_t hi);
     void trackFront();
     bool stalled();
+    void trackObstacle();
+    // Obstacle qui traverse et sort bientôt du couloir : attendre (true).
+    // `clearSoon` : sa position prévue est déjà hors du couloir (repartir).
+    bool crossingObstacle(bool& clearSoon) const;
     bool oncomingObstacle() const { return _oncomingFrames >= 2; }
     bool startDodge();
     void updateDodge();
@@ -282,6 +303,7 @@ class GoTo : public Action {
     Phase _phase = Phase::Done;
     bool _replanPending = false;
     bool _pivotNext = false;  // prochaine reprise : pivoter (contournement)
+    bool _arcTurning = false;  // virage en roulant en cours (phase Turning)
     uint32_t _startMs = 0;
     uint32_t _lastRetargetMs = 0;
     uint32_t _blockedSinceMs = 0;  // 0 = pas bloqué
@@ -300,6 +322,11 @@ class GoTo : public Action {
     Pose _prevPose;
     float _dodgeSide = 0.0f;  // -1 droite, +1 gauche
     float _dodgeStartHeading = 0.0f;
+
+    // Obstacle suivi (repère table) : position, vitesse lissée
+    bool _obsValid = false;
+    float _obsX = 0, _obsY = 0, _obsVx = 0, _obsVy = 0;
+    uint32_t _obsMs = 0, _obsFrame = 0;
 
     // Blocage invisible : distances des capteurs et odométrie de référence
     bool _stallRefSet = false;
@@ -358,6 +385,83 @@ class KeepDistance : public Action {
     uint32_t _lastMs = 0;
     bool _pivoting = false;
     bool _finished = false;
+};
+
+// ------------------------------------------------------------------
+// Aller à un but en suivant un chemin calculé (GridPlanner), recalculé
+// régulièrement avec la position prévue des autres robots (Jetson). Pour les
+// PAMI qui ont le Wi-Fi 6E.
+//
+// Le chemin est celui du CENTRE du PAMI. Le PAMI roule en courbe vers un
+// point du chemin un peu devant lui ; il pivote si ce point est trop sur le
+// côté. Sécurité : un obstacle devant que les capteurs voient (et que la
+// Jetson n'a pas signalé) arrête le PAMI et devient un obstacle pour le
+// prochain calcul, fait tout de suite.
+// ------------------------------------------------------------------
+class FollowPath : public Action {
+   public:
+    // But (centre du PAMI) ; peut bouger (attaque : PAMI adverse).
+    using GoalProvider = std::function<bool(const Pose& center, Pose& goal)>;
+    // Remplit le planificateur avec les robots à éviter (et peut ignorer
+    // celui qui est le but).
+    using ObstacleFiller = std::function<void(GridPlanner& planner, const Pose& goal)>;
+    using PathListener = std::function<void(const GridPlanner::Point* pts, int count)>;
+
+    struct Options {
+        float centerAheadMm = 0.0f;  // centre du PAMI devant l'axe des roues
+        float sensorAheadMm = 0.0f;  // point de référence des capteurs devant l'axe
+        float stopWithinMm = 20.0f;  // centre à cette distance du but : arrivé
+        bool finalHeading = false;   // à la fin : s'orienter selon goal.theta
+        bool faceGoal = false;       // à la fin : se tourner vers le but
+        GoalProvider goalProvider = nullptr;
+        bool waitForGoal = false;  // ne pas partir sans but
+        ObstacleFiller obstacles = nullptr;
+        KnownObstacleFilter isIgnored = nullptr;  // points capteurs à ignorer
+        PathListener onPath = nullptr;            // (affichage, simulation)
+        uint32_t replanMs = 250;
+        uint32_t steerMs = 100;
+        float lookaheadMm = 200.0f;   // vise un point du chemin à cette distance
+        float maxStepMm = 250.0f;     // consigne d'avance au plus de ça
+        float pivotAboveRad = 1.05f;  // au-delà de 60° : virage serré
+        float turnRadiusMm = 0.0f;    // rayon du virage serré (0 = pivot sur place)
+        // Pose libre sur la carte ? Vérifié avant chaque virage serré.
+        std::function<bool(const Pose& pose)> isPoseFree = nullptr;
+        float sensedObstacleRadiusMm = 220.0f;
+        uint32_t sensedObstacleMs = 1500;  // durée de vie d'un obstacle vu
+        uint32_t timeoutMs = 0;            // 0 = pas de limite
+    };
+
+    FollowPath(DiffDrive& drive, const ObstacleSensor* sensor, GridPlanner& planner,
+               const Pose& goal, const Options& options)
+        : _drive(drive), _sensor(sensor), _planner(planner), _goal(goal), _opt(options) {}
+    void start() override;
+    void update() override;
+    void stop() override;
+    bool isFinished() const override { return _phase == Phase::Done; }
+    const char* name() const override { return "FollowPath"; }
+
+   private:
+    enum class Phase { Waiting, Following, Pivot, FinalTurn, Done };
+    Pose center() const;
+    void replan(const Pose& c);
+    bool lookahead(const Pose& c, GridPlanner::Point& out) const;
+    void arrive();
+    bool blockedBySensors(const Pose& axle);
+    bool arcFree(const Pose& from, float length, float rotation) const;
+
+    DiffDrive& _drive;
+    const ObstacleSensor* _sensor;
+    GridPlanner& _planner;
+    Pose _goal;
+    Options _opt;
+    Phase _phase = Phase::Done;
+    uint32_t _startMs = 0, _lastPlanMs = 0, _lastSteerMs = 0, _lastGoalMs = 0;
+    bool _replanNow = false;
+    GridPlanner::Point _path[GridPlanner::MAX_WAYPOINTS] = {};
+    int _pathCount = 0;
+    bool _sensed = false;
+    float _sensedX = 0, _sensedY = 0;
+    uint32_t _sensedMs = 0;
 };
 
 // ------------------------------------------------------------------

@@ -14,6 +14,8 @@ python sim/run.py --team jaune
 python sim/run.py --no-enemies    # seulement nos PAMI seuls
 python sim/run.py --no-jetson     # sans Jetson simulée (pas de Wi-Fi : capteurs seuls)
 python sim/run.py --no-allies     # la Jetson n'envoie que les adversaires, pas nos PAMI
+python sim/run.py --enemy-classic # adversaire sans recherche de chemin (pour mesurer
+                                  # l'effet de la recherche de chemin sur notre équipe seule)
 python sim/run.py --speed 250     # vitesse max des PAMI (mm/s, défaut 300)
 python sim/run.py --size 190 95   # taille d'un PAMI : longueur largeur (mm)
 python sim/run.py --axle 0        # roues au centre (défaut : -85, à l'arrière)
@@ -35,6 +37,10 @@ navigateur. Il faut `g++` : MinGW ou MSYS2 sous Windows.
   pour avancer ou reculer de 0,5 s. La lecture commence à 84 s.
 - Chaque PAMI est dessiné à sa **vraie taille** (rectangle), le triangle
   noir indique l'avant. Contour **rouge** = collision.
+- Couleur **foncée, contour cyan, 📶** : PAMI avec Wi-Fi 6E et Jetson (il
+  connaît la position des robots et calcule un vrai chemin, dessiné en
+  **cyan pointillé** : case « chemins calculés »). Couleur **claire** : PAMI
+  sans Jetson (capteurs seuls).
 - Cônes blancs devant : champ des capteurs ToF (case « capteurs ToF »). Rectangle devant : couloir surveillé,
   **rouge** quand un obstacle y est détecté.
 - Lignes pointillées : trajet prévu (sortie d'écurie, points de passage,

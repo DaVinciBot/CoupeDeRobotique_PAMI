@@ -21,13 +21,36 @@ void remoteSetOdometry(App& a, const Pose& pose) {
 
 namespace {
 
+// La Jetson ne dit pas qui est qui d'une trame à l'autre : chaque position
+// est rapprochée de la plus proche de la trame précédente (un PAMI ne fait pas
+// plus de 15 cm entre deux trames), et la vitesse est lissée.
 void storePositions(RemoteEnemies& e, const float* xs, const float* ys, uint8_t count) {
+    constexpr float MATCH_MM = 150.0f;
+    constexpr float SMOOTH = 0.5f;  // part de la nouvelle mesure
+    const RemoteEnemies prev = e;
+    uint32_t now = millis();
+    float dt = prev.timeMs != 0 ? (now - prev.timeMs) / 1000.0f : 0.0f;
     e.count = count < RemoteEnemies::MAX ? count : RemoteEnemies::MAX;
     for (uint8_t i = 0; i < e.count; ++i) {
         e.x[i] = xs[i];
         e.y[i] = ys[i];
+        e.vx[i] = e.vy[i] = 0.0f;
+        if (dt <= 0.02f || dt > 0.5f) continue;  // trop proche ou trop vieux
+        int best = -1;
+        float bestD = MATCH_MM;
+        for (uint8_t j = 0; j < prev.count; ++j) {
+            float d = hypotf(xs[i] - prev.x[j], ys[i] - prev.y[j]);
+            if (d < bestD) {
+                bestD = d;
+                best = j;
+            }
+        }
+        if (best < 0) continue;
+        float vx = (xs[i] - prev.x[best]) / dt, vy = (ys[i] - prev.y[best]) / dt;
+        e.vx[i] = SMOOTH * vx + (1.0f - SMOOTH) * prev.vx[best];
+        e.vy[i] = SMOOTH * vy + (1.0f - SMOOTH) * prev.vy[best];
     }
-    e.timeMs = millis();
+    e.timeMs = now;
     if (e.timeMs == 0) e.timeMs = 1;  // 0 = « jamais reçu »
 }
 
